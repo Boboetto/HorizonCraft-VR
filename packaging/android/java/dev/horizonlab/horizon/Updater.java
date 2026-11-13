@@ -22,12 +22,12 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 /**
- * Horizon VR's updates: asks GitHub for the latest release, and installs its APK over this
+ * HorizonCraft VR's updates: asks GitHub for the latest release, and installs its APK over this
  * one with the system's package installer (same signing key, so worlds and settings stay).
  */
 final class Updater {
-    static final String RELEASES = "https://github.com/Boboetto/Horizon-vr/releases/latest";
-    private static final String API = "https://api.github.com/repos/Boboetto/Horizon-vr/releases/latest";
+    static final String RELEASES = "https://github.com/Boboetto/HorizonCraft-VR/releases/latest";
+    private static final String API = "https://api.github.com/repos/Boboetto/HorizonCraft-VR/releases/latest";
     private static final String DONE = "dev.horizonlab.horizon.UPDATE_INSTALLED";
 
     /** A newer release: its version and APK. */
@@ -92,7 +92,7 @@ final class Updater {
                     http.setConnectTimeout(8000);
                     http.setReadTimeout(8000);
                     http.setRequestProperty("Accept", "application/vnd.github+json");
-                    http.setRequestProperty("User-Agent", "Horizon-VR-launcher");
+                    http.setRequestProperty("User-Agent", "HorizonCraft-VR-launcher");
                     if (http.getResponseCode() == 200) {
                         JSONObject json = new JSONObject(read(http.getInputStream()));
                         String tag = json.optString("tag_name", "");
@@ -141,7 +141,7 @@ final class Updater {
                     HttpURLConnection http = (HttpURLConnection) new URL(release.apk).openConnection();
                     http.setConnectTimeout(15000);
                     http.setReadTimeout(30000);
-                    http.setRequestProperty("User-Agent", "Horizon-VR-launcher");
+                    http.setRequestProperty("User-Agent", "HorizonCraft-VR-launcher");
                     long total = release.size > 0 ? release.size : http.getContentLength();
                     try (InputStream in = http.getInputStream(); OutputStream out = new FileOutputStream(apk)) {
                         byte[] buf = new byte[1 << 16];

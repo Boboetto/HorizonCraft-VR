@@ -16,21 +16,23 @@ import android.widget.TextView;
 import java.util.Locale;
 
 /**
- * Shared look of Horizon VR's setup and profile screens, in the spirit of a block game's
+ * Shared look of HorizonCraft VR's setup and profile screens, in the spirit of a block game's
  * menus: a pixel-block background, square panels and buttons with a raised bevel, a green
  * play button and text with a hard drop shadow. Everything is drawn here: no game art.
  */
 final class Ui {
-    static final int BG = Color.rgb(24, 22, 20);
-    static final int CARD = Color.rgb(48, 48, 52);
-    static final int EDGE = Color.rgb(16, 16, 18);
-    static final int GREEN = Color.rgb(74, 140, 46);
-    static final int GREEN_DARK = Color.rgb(44, 92, 26);
-    static final int STONE = Color.rgb(112, 112, 116);
-    static final int TEXT = Color.rgb(244, 244, 240);
-    static final int MUTED = Color.rgb(176, 176, 170);
-    static final int WARN = Color.rgb(252, 214, 84);
-    static final int SHADOW = Color.rgb(36, 36, 36);
+    // Black and white: dark translucent panels over the pixel night sky, white outlines,
+    // a white play button.
+    static final int BG = Color.rgb(8, 8, 10);
+    static final int CARD = Color.argb(215, 10, 10, 12);
+    static final int EDGE = Color.rgb(232, 232, 232);
+    static final int GREEN = Color.rgb(240, 240, 240);
+    static final int GREEN_DARK = Color.rgb(150, 150, 150);
+    static final int STONE = Color.rgb(36, 36, 40);
+    static final int TEXT = Color.rgb(246, 246, 246);
+    static final int MUTED = Color.rgb(170, 170, 170);
+    static final int WARN = Color.rgb(255, 255, 255);
+    static final int SHADOW = Color.rgb(0, 0, 0);
 
     private Ui() {}
 
@@ -52,7 +54,7 @@ final class Ui {
     }
 
     static int shade(int color, float by) {
-        return Color.rgb(
+        return Color.argb(Color.alpha(color),
                 Math.max(0, Math.min(255, (int) (Color.red(color) * by))),
                 Math.max(0, Math.min(255, (int) (Color.green(color) * by))),
                 Math.max(0, Math.min(255, (int) (Color.blue(color) * by))));
@@ -90,7 +92,43 @@ final class Ui {
 
         @Override public void setAlpha(int alpha) {}
         @Override public void setColorFilter(android.graphics.ColorFilter f) {}
-        @Override public int getOpacity() { return android.graphics.PixelFormat.OPAQUE; }
+        @Override public int getOpacity() { return android.graphics.PixelFormat.TRANSLUCENT; }
+    }
+
+    /**
+     * A pixel sunset under a starry night, in black and white: the sky darkens from a pale glow
+     * at the horizon to black, white stars above, a white sun half set behind black blocky
+     * hills. Drawn at 192x108 and scaled up without smoothing.
+     */
+    static android.graphics.drawable.Drawable sunset(Context c) {
+        int w = 192, h = 108, horizon = 80;
+        android.graphics.Bitmap sky = android.graphics.Bitmap.createBitmap(w, h, android.graphics.Bitmap.Config.ARGB_8888);
+        java.util.Random random = new java.util.Random(26);
+        for (int y = 0; y < h; y++) {
+            // Bands of 4 pixels, as a block game's sky would be.
+            float t = Math.min(1f, (y / 4 * 4) / (float) horizon);
+            int g = (int) (6 + 150 * t * t * t);
+            for (int x = 0; x < w; x++) sky.setPixel(x, y, Color.rgb(g, g, g));
+        }
+        for (int i = 0; i < 90; i++) {
+            int x = random.nextInt(w), y = random.nextInt(horizon - 30);
+            int v = random.nextInt(3) == 0 ? 255 : 150 + random.nextInt(60);
+            sky.setPixel(x, y, Color.rgb(v, v, v));
+        }
+        // The sun: a square sinking at the horizon, its lower half behind the hills.
+        for (int y = horizon - 20; y < horizon; y++)
+            for (int x = 124; x < 144; x++) sky.setPixel(x, y, Color.rgb(250, 250, 250));
+        // Blocky hills, 4-pixel columns, low enough to leave the sun's top half.
+        int top = horizon - 4;
+        for (int x = 0; x < w; x += 4) {
+            top = Math.max(horizon - 10, Math.min(horizon + 2, top + (random.nextInt(3) - 1) * 4));
+            for (int y = top; y < h; y++)
+                for (int dx = 0; dx < 4 && x + dx < w; dx++) sky.setPixel(x + dx, y, Color.rgb(4, 4, 6));
+        }
+        android.graphics.drawable.BitmapDrawable d = new android.graphics.drawable.BitmapDrawable(c.getResources(), sky);
+        d.setFilterBitmap(false);
+        d.setGravity(Gravity.FILL);
+        return d;
     }
 
     /** A pixel-block background: a 16x16 tile of earthy shades, scaled up without smoothing. */
@@ -117,7 +155,7 @@ final class Ui {
     /** A full-screen background with a centered card; returns the card to fill. */
     static LinearLayout card(android.app.Activity a) {
         FrameLayout root = new FrameLayout(a);
-        root.setBackground(blocks(a));
+        root.setBackground(sunset(a));
         android.widget.ScrollView scroll = new android.widget.ScrollView(a);
         scroll.setFillViewport(true);
         FrameLayout center = new FrameLayout(a);
@@ -165,8 +203,14 @@ final class Ui {
         states.addState(new int[] {android.R.attr.state_hovered}, new Bevel(dp(c, 2), shade(fill, 1.15f), Color.WHITE, false));
         states.addState(new int[] {}, new Bevel(dp(c, 2), fill, EDGE, false));
         b.setBackground(states);
-        b.setTextColor(Color.WHITE);
-        b.setShadowLayer(0.01f, dp(c, 1.5f), dp(c, 1.5f), SHADOW);
+        if (primary) {
+            // Black on the white button.
+            b.setTextColor(Color.BLACK);
+            b.setShadowLayer(0, 0, 0, 0);
+        } else {
+            b.setTextColor(Color.WHITE);
+            b.setShadowLayer(0.01f, dp(c, 1.5f), dp(c, 1.5f), SHADOW);
+        }
         b.setMinHeight(dp(c, primary ? 54 : 44));
         b.setStateListAnimator(null);
         return b;

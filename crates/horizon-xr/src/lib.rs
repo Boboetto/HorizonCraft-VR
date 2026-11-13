@@ -1041,7 +1041,8 @@ pub fn begin_frame() -> Option<FrameViews> {
             _ => None,
         };
         let held = s.pad.triggers[i] > 0.5;
-        if held && !s.triggers_held[i] && s.pointers[i].is_some() {
+        // The hand whose trigger went down last owns the one pointer (in menus) or crosshair.
+        if held && !s.triggers_held[i] && (s.pointers[i].is_some() || panel.is_none()) {
             s.active_hand = i;
         }
         s.triggers_held[i] = held;
@@ -1454,6 +1455,10 @@ fn finish_frame(s: &mut Session, sharpen: bool, queue: &wgpu::Queue) {
         if let Some(panel) = s.menu_pose {
             let rotation = quat(panel.orientation);
             for i in 0..2 {
+                // One pointer at a time: the hand used last.
+                if i != s.active_hand {
+                    continue;
+                }
                 if let Some((_, at)) = s.pointers[i] {
                     let active = i == s.active_hand;
                     colours[i] = match (active, s.pad.triggers[i] > 0.5) {
@@ -1474,8 +1479,9 @@ fn finish_frame(s: &mut Session, sharpen: bool, queue: &wgpu::Queue) {
         }
         if s.menu_pose.is_none() {
             for i in 0..2 {
-                // The right hand's crosshair gives way to its dot over the wrist.
-                if i == 1 && s.wrist_point.is_some() {
+                // One crosshair at a time: the hand whose trigger went down last. The right
+                // hand's gives way to its dot over the wrist.
+                if i != s.active_hand || (i == 1 && s.wrist_point.is_some()) {
                     continue;
                 }
                 let Some((offset, normal)) = s.aim_points[i] else { continue };

@@ -123,8 +123,15 @@ fn with_touch_controllers(mut pad: PadState, touch: horizon_xr::Pad) -> PadState
         (touch.a, Button::South),
         // In an inventory or a container B quick-moves (`xr_buttons`); Y closes it.
         (touch.b && !CONTAINER_SCREEN.load(std::sync::atomic::Ordering::Relaxed), Button::East),
-        // Y with X held throws the rest of the stack (`xr_buttons`), it opens nothing.
-        (touch.y && !touch.x, Button::North),
+        // Y with X held throws the rest of the stack (`xr_buttons`), it opens nothing; in an
+        // inventory Y closes it there, and opens nothing again until it is let go.
+        (
+            touch.y
+                && !touch.x
+                && !CONTAINER_SCREEN.load(std::sync::atomic::Ordering::Relaxed)
+                && !Y_LATCH.load(std::sync::atomic::Ordering::Relaxed),
+            Button::North,
+        ),
         (touch.menu, Button::Start),
         (touch.left_click, Button::LeftStick),
         (touch.right_click, Button::RightStick),
@@ -135,6 +142,9 @@ fn with_touch_controllers(mut pad: PadState, touch: horizon_xr::Pad) -> PadState
     }
     // The left stick walks where the head faces, though the player's yaw follows the
     // right hand's aim: turned by the difference (Minecraft's input: x left, z ahead).
+    if !touch.y {
+        Y_LATCH.store(false, std::sync::atomic::Ordering::Relaxed);
+    }
     let touch = {
         let turn = horizon_xr::move_turn().to_radians();
         let (sin, cos) = turn.sin_cos();
@@ -196,6 +206,8 @@ pub(super) fn take_used() -> (bool, bool) {
 
 /// VR: an inventory or container screen is open: B quick-moves there instead of going back.
 static CONTAINER_SCREEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// VR: Y closed an inventory or container (`xr_buttons`): it opens nothing until let go.
+static Y_LATCH: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 /// VR: clicks queued with Shift held (`xr_buttons`); Shift lets go once they are handled.
 static SHIFT_ONCE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 /// VR: the hand strikes by itself (a blow into a block, a swing at a mob), for the arm's swing.
@@ -895,6 +907,12 @@ impl super::Game<'_> {
         // - both grips move every stack of that item to the other side (Shift + double click);
         // - the left grip alone takes half the stack (right click), the right grip alone puts
         //   one item of the carried stack down (right click).
+        // Y closes an inventory or container (the pad's button reaches no screen with the
+        // pointer), as Escape does.
+        if container && pressed(2) && !pad.x {
+            Y_LATCH.store(true, Ordering::Relaxed);
+            let _ = self.key_pressed(KeyCode::Escape, KeyCode::Escape);
+        }
         if container {
             let mut clicks: Vec<(u8, bool)> = Vec::new();
             if pressed(32) {

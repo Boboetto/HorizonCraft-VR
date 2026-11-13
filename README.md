@@ -1,15 +1,15 @@
 <p align="center">
-  <img src="docs/media/icon-256.png" width="128" alt="Horizon VR">
+  <img src="docs/media/icon-256.png" width="128" alt="HorizonCraft VR">
 </p>
 
-<h1 align="center">Horizon VR</h1>
+<h1 align="center">HorizonCraft VR</h1>
 
 <p align="center">
   Standalone VR for <b>Meta Quest 3</b>, on Horizon: Minecraft: Java Edition 26.3 rewritten in Rust
 </p>
 
 <p align="center">
-  <a href="https://github.com/Boboetto/Horizon-vr/releases/latest"><img src="https://img.shields.io/github/v/release/Boboetto/Horizon-vr?label=release" alt="Latest release"></a>
+  <a href="https://github.com/Boboetto/HorizonCraft-VR/releases/latest"><img src="https://img.shields.io/github/v/release/Boboetto/HorizonCraft-VR?label=release" alt="Latest release"></a>
   <img src="https://img.shields.io/badge/Meta%20Quest-3%20only-1C1E20" alt="Meta Quest 3 only">
   <img src="https://img.shields.io/badge/Minecraft-Java%2026.3-5D9C3F" alt="Minecraft Java 26.3">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="License MIT"></a>
@@ -19,7 +19,7 @@
 > You need to **own Minecraft: Java Edition**. This repository and its releases contain **no Mojang files**: the app
 > downloads them from Mojang on the headset.
 
-Horizon VR is a standalone APK for the **Meta Quest 3** (for now the only supported headset): no PC, no streaming.
+HorizonCraft VR is a standalone APK for the **Meta Quest 3** (for now the only supported headset): no PC, no streaming.
 It plays Minecraft: Java Edition 26.3 in VR, with motion controls in the spirit of Vivecraft and QuestCraft.
 
 ## Features
@@ -32,7 +32,7 @@ It plays Minecraft: Java Edition 26.3 in VR, with motion controls in the spirit 
   breaststroke to swim where you look, two-handed bow
 - Menus on a panel in the room with a pointer for each hand, 360° title panorama
 - Walk where you look with the left stick, turn with the right one
-- Three modes in the launcher (Performance, Balanced, Quality) that set the resolution, refresh rate and the game's heaviest options, plus frame pacing against micro-stutter
+- A Quality setup tuned for the Quest 3 (1.4x resolution, 90 Hz, 6 chunks, anisotropic filtering), plus frame pacing against micro-stutter
 - In-app updates: the launcher shows an **Update** button when a new release is out
 
 ## Controls
@@ -60,21 +60,21 @@ It plays Minecraft: Java Edition 26.3 in VR, with motion controls in the spirit 
 
 1. Turn on **developer mode** for your Quest 3: in the **Meta Horizon** app on your phone → Menu → Devices →
    your headset → Headset settings → Developer mode (Meta asks you to create a free developer account once).
-2. Download **`Horizon-VR-v*.apk`** from the [latest release](https://github.com/Boboetto/Horizon-vr/releases/latest).
+2. Download **`HorizonCraft-VR-v*.apk`** from the [latest release](https://github.com/Boboetto/HorizonCraft-VR/releases/latest).
 3. Install it with **SideQuest**: connect the headset to the computer with its USB-C cable, accept "Allow USB debugging"
    in the headset, then drag the APK onto the SideQuest window.
    (Or drag it onto **Meta Quest Developer Hub**.)
-4. In the headset, open **App Library → Unknown sources → Horizon VR**.
+4. In the headset, open **App Library → Unknown sources → HorizonCraft VR**.
 
 ## First start
 
 Press **Download game files** and wait a few minutes, on Wi-Fi:
 
 1. the headset downloads the official Minecraft: Java Edition 26.3 files from Mojang (about 700 MB);
-2. Horizon VR prepares its game data on the headset itself, with a Java runtime built into the app (about a minute);
+2. HorizonCraft VR prepares its game data on the headset itself, with a Java runtime built into the app (about a minute);
 3. the game starts. Next time it opens straight away.
 
-Later updates: tap **Update** in the launcher's *Updates* section and confirm the install (allow installs from Horizon VR the first time). Your worlds stay.
+Later updates: tap **Update** in the launcher's *Updates* section and confirm the install (allow installs from HorizonCraft VR the first time). Your worlds stay.
 
 No computer needed after installing. You need to own Minecraft: Java Edition.
 
@@ -82,9 +82,9 @@ No computer needed after installing. You need to own Minecraft: Java Edition.
 
 1. **Installa:** attiva la modalità sviluppatore (app Meta Horizon sul telefono → Dispositivi → visore →
    Impostazioni → Modalità sviluppatore) e installa l'APK dell'ultima release trascinandolo su **SideQuest**.
-2. **Apri** Horizon VR da **Libreria → Origini sconosciute**.
+2. **Apri** HorizonCraft VR da **Libreria → Origini sconosciute**.
 3. **Premi "Download game files"** e aspetta qualche minuto col Wi-Fi: il visore scarica i file ufficiali da Mojang,
-   prepara da solo i dati di gioco e avvia Horizon VR. Nessun PC necessario. Serve possedere Minecraft: Java Edition.
+   prepara da solo i dati di gioco e avvia HorizonCraft VR. Nessun PC necessario. Serve possedere Minecraft: Java Edition.
 
 ## Building
 

@@ -67,7 +67,7 @@ public class SetupActivity extends Activity
             return;
         }
         LinearLayout card = Ui.card(this);
-        TextView logo = Ui.text(this, "HORIZON VR", 34, Ui.TEXT, true);
+        TextView logo = Ui.text(this, "HORIZONCRAFT VR", 30, Ui.TEXT, true);
         logo.setLetterSpacing(0.08f);
         logo.setGravity(android.view.Gravity.CENTER_HORIZONTAL);
         card.addView(logo);
@@ -75,8 +75,8 @@ public class SetupActivity extends Activity
         first.setGravity(android.view.Gravity.CENTER_HORIZONTAL);
         card.addView(first);
         card.addView(Ui.text(this, Ui.t(
-                "Игре нужны файлы Minecraft 26.3: они скачаются автоматически (около 700 МБ, лучше по Wi-Fi), потом Horizon VR подготовит свои данные. Несколько минут, и игра запустится сама.",
-                "The game needs the Minecraft 26.3 files: they download by themselves (about 700 MB, Wi-Fi is best), then Horizon VR prepares its data. A few minutes, then the game starts by itself."),
+                "Игре нужны файлы Minecraft 26.3: они скачаются автоматически (около 700 МБ, лучше по Wi-Fi), потом HorizonCraft VR подготовит свои данные. Несколько минут, и игра запустится сама.",
+                "The game needs the Minecraft 26.3 files: they download by themselves (about 700 MB, Wi-Fi is best), then HorizonCraft VR prepares its data. A few minutes, then the game starts by itself."),
                 15, Ui.TEXT, false), Ui.gap(this, 12));
         note = Ui.text(this, "", 14, Ui.WARN, false);
         note.setVisibility(View.GONE);

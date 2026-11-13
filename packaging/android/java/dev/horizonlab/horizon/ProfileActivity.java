@@ -63,7 +63,7 @@ public class ProfileActivity extends Activity implements View.OnClickListener {
 
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.HORIZONTAL);
-        root.setBackground(Ui.blocks(this));
+        root.setBackground(Ui.sunset(this));
         int pad = Ui.dp(this, 16);
         root.setPadding(pad, pad, pad, pad);
 
@@ -75,7 +75,7 @@ public class ProfileActivity extends Activity implements View.OnClickListener {
         LinearLayout head = new LinearLayout(this);
         head.setOrientation(LinearLayout.HORIZONTAL);
         head.setGravity(Gravity.CENTER_VERTICAL);
-        TextView title = Ui.text(this, "HORIZON VR", 24, Ui.TEXT, true);
+        TextView title = Ui.text(this, "HORIZONCRAFT VR", 22, Ui.TEXT, true);
         title.setLetterSpacing(0.06f);
         head.addView(title, new LinearLayout.LayoutParams(0, -2, 1));
         TextView ver = Ui.text(this, version(), 12, Ui.MUTED, false);
@@ -128,8 +128,9 @@ public class ProfileActivity extends Activity implements View.OnClickListener {
         play.setLetterSpacing(0.1f);
         play.setMinHeight(Ui.dp(this, 60));
         play.setOnClickListener(this);
+        play.setTextColor(Color.BLACK);
+        play.setShadowLayer(0, 0, 0, 0);
         left.addView(play, Ui.gap(this, 6));
-        root.addView(left, new LinearLayout.LayoutParams(0, -1, 1));
 
         // Right: settings.
         ScrollView scroll = new ScrollView(this);
@@ -139,94 +140,11 @@ public class ProfileActivity extends Activity implements View.OnClickListener {
         card.setOrientation(LinearLayout.VERTICAL);
         card.setPadding(Ui.dp(this, 16), Ui.dp(this, 4), Ui.dp(this, 16), Ui.dp(this, 16));
         scroll.addView(card);
-        LinearLayout.LayoutParams rightLp = new LinearLayout.LayoutParams(0, -1, 1.15f);
+        // Settings on the left (sign-in first), the player and Play on the right.
+        root.addView(scroll, new LinearLayout.LayoutParams(0, -1, 1.15f));
+        LinearLayout.LayoutParams rightLp = new LinearLayout.LayoutParams(0, -1, 1);
         rightLp.leftMargin = Ui.dp(this, 14);
-        root.addView(scroll, rightLp);
-
-        // Horizon VR's own settings and updates.
-        Ui.section(card, Ui.t("Обновления", "Updates"));
-        final TextView updateStatus = Ui.text(this, "Horizon VR v" + Updater.installed(this)
-                + Ui.t(" · проверка…", " · checking…"), 14, Ui.TEXT, true);
-        card.addView(updateStatus);
-        final Button update = Ui.button(this, "", true);
-        update.setVisibility(View.GONE);
-        card.addView(update, Ui.gap(this, 6));
-        Updater.check(this, new Updater.Found() {
-            public void found(final Updater.Release release) {
-                if (release == null) {
-                    updateStatus.setText("Horizon VR v" + Updater.installed(ProfileActivity.this)
-                            + Ui.t(" · последняя версия", " · up to date"));
-                    return;
-                }
-                updateStatus.setText(Ui.t("Доступна новая версия ", "New version available: ") + release.version);
-                update.setText(Ui.t("Обновить до ", "Update to ") + release.version);
-                update.setVisibility(View.VISIBLE);
-                update.setOnClickListener(new View.OnClickListener() {
-                    public void onClick(View v) {
-                        update.setEnabled(false);
-                        Updater.install(ProfileActivity.this, release, new Updater.Progress() {
-                            public void status(String text, boolean finished) {
-                                update.setText(text);
-                                if (finished) update.setEnabled(true);
-                            }
-                        });
-                    }
-                });
-            }
-        });
-
-        Ui.section(card, Ui.t("Настройки VR", "VR settings"));
-        card.addView(Ui.text(this, Ui.t(
-                "Режим задаёт разрешение, частоту и настройки игры (дальность, облака, частицы). Применяется при следующем запуске игры.",
-                "The mode sets the resolution, the refresh rate and the game's heaviest settings (render distance, clouds, particles). Applies the next time the game starts."),
-                12, Ui.MUTED, false));
-        final String[] modes = {"performance", "balanced", "quality"};
-        final Button modeButton = Ui.button(this, "", false);
-        final Button paceButton = Ui.button(this, "", false);
-        final TextView modeInfo = Ui.text(this, "", 12, Ui.MUTED, false);
-        final boolean[] pace = {vrSetting("pace", 1) != 0};
-        final String[] mode = {vrMode()};
-        if (mode[0] == null) {
-            mode[0] = "balanced";
-            applyMode(mode[0], pace[0]);
-        }
-        final Runnable showVr = new Runnable() {
-            public void run() {
-                String name = mode[0].equals("performance") ? "Performance"
-                        : mode[0].equals("quality") ? "Quality" : "Balanced";
-                modeButton.setText(Ui.t("Режим: ", "Mode: ") + name);
-                modeInfo.setText(mode[0].equals("performance")
-                        ? "Most chunks, softer image: 0.8x · 12 chunks · no clouds"
-                        : mode[0].equals("quality")
-                                ? "Sharpest image, fewer chunks: 1.2x · 6 chunks · fancy clouds · anisotropic 8x"
-                                : "Between the two: 1.0x · 9 chunks · fast clouds · anisotropic 4x");
-                paceButton.setText(Ui.t("Ровные кадры: ", "Frame pacing: ") + (pace[0] ? "Auto" : "Off"));
-            }
-        };
-        showVr.run();
-        modeButton.setOnClickListener(new View.OnClickListener() {
-            public void onClick(View v) {
-                int next = 0;
-                for (int i = 0; i < modes.length; i++) if (modes[i].equals(mode[0])) next = (i + 1) % modes.length;
-                mode[0] = modes[next];
-                applyMode(mode[0], pace[0]);
-                showVr.run();
-            }
-        });
-        paceButton.setOnClickListener(new View.OnClickListener() {
-            public void onClick(View v) {
-                pace[0] = !pace[0];
-                applyMode(mode[0], pace[0]);
-                showVr.run();
-            }
-        });
-        card.addView(modeButton, Ui.gap(this, 6));
-        card.addView(modeInfo);
-        card.addView(paceButton, Ui.gap(this, 6));
-        card.addView(Ui.text(this, Ui.t(
-                "Ровные кадры: если игра не успевает, она рисует каждый второй кадр ровно, без рывков.",
-                "Frame pacing: when the game cannot keep up, it draws every second frame evenly instead of unevenly, without micro-stutter."),
-                12, Ui.MUTED, false));
+        root.addView(left, rightLp);
 
         Ui.section(card, Ui.t("Аккаунт Microsoft", "Microsoft account"));
         accountStatus = Ui.text(this, accountLine(), 15, Ui.TEXT, true);
@@ -291,66 +209,70 @@ public class ProfileActivity extends Activity implements View.OnClickListener {
         advancedBox.setVisibility(View.GONE);
         card.addView(advancedBox, Ui.gap(this, 6));
 
-        Ui.section(card, Ui.t("Драйвер Vulkan · экспериментально", "Vulkan driver · experimental"));
-        driverStatus = Ui.text(this, Turnip.status(this), 13, Ui.TEXT, false);
-        card.addView(driverStatus);
-        if (new File(getFilesDir(), "vulkan-driver.failed").isFile()) {
-            card.addView(Ui.text(this, Ui.t(
-                    "Свой драйвер не запустился в прошлый раз, игра вернулась на системный. Попробуйте другую сборку Turnip.",
-                    "The custom driver did not start last time, so the game went back to the system one. Try another Turnip build."),
-                    12, Ui.WARN, false));
-        }
-        card.addView(Ui.text(this, Ui.t(
-                "Zip с Turnip (libvulkan_freedreno.so). На части Snapdragon быстрее системного. Если игра с ним не стартует, следующий запуск будет на системном.",
-                "A Turnip zip (libvulkan_freedreno.so). Faster than the system driver on some Snapdragons. If the game fails to start with it, the next launch uses the system one."),
-                12, Ui.MUTED, false));
-        LinearLayout drivers = new LinearLayout(this);
-        drivers.setOrientation(LinearLayout.HORIZONTAL);
-        driver = Ui.button(this, Ui.t("Установить Turnip", "Install Turnip"), false);
-        driver.setOnClickListener(this);
-        systemDriver = Ui.button(this, Ui.t("Системный", "System"), false);
-        systemDriver.setOnClickListener(this);
-        drivers.addView(driver, new LinearLayout.LayoutParams(0, -2, 1));
-        LinearLayout.LayoutParams dl = new LinearLayout.LayoutParams(0, -2, 1);
-        dl.leftMargin = Ui.dp(this, 8);
-        drivers.addView(systemDriver, dl);
-        card.addView(drivers, Ui.gap(this, 8));
-        final File safeMode = new File(getFilesDir(), "safe-mode.txt");
-        if (safeMode.isFile()) {
-            card.addView(Ui.text(this, Ui.t(
-                    "Безопасный запуск: Vulkan не стартовал, игра работает на OpenGL ES и может быть медленнее.",
-                    "Safe start: Vulkan did not start, so the game runs on OpenGL ES and can be slower."),
-                    12, Ui.WARN, false), Ui.gap(this, 8));
-            Button vulkan = Ui.button(this, Ui.t("Попробовать Vulkan снова", "Try Vulkan again"), false);
-            vulkan.setOnClickListener(new View.OnClickListener() {
-                public void onClick(View v) {
-                    safeMode.delete();
-                    new File(getFilesDir(), "launch.pending").delete();
-                    v.setEnabled(false);
-                    ((Button) v).setText(Ui.t("Перезапустите игру", "Restart the game"));
+        // Horizon VR's own settings and updates.
+        Ui.section(card, Ui.t("Обновления", "Updates"));
+        final TextView updateStatus = Ui.text(this, "HorizonCraft VR v" + Updater.installed(this)
+                + Ui.t(" · проверка…", " · checking…"), 14, Ui.TEXT, true);
+        card.addView(updateStatus);
+        final Button update = Ui.button(this, "", true);
+        update.setVisibility(View.GONE);
+        card.addView(update, Ui.gap(this, 6));
+        Updater.check(this, new Updater.Found() {
+            public void found(final Updater.Release release) {
+                if (release == null) {
+                    updateStatus.setText("HorizonCraft VR v" + Updater.installed(ProfileActivity.this)
+                            + Ui.t(" · последняя версия", " · up to date"));
+                    return;
                 }
-            });
-            card.addView(vulkan, Ui.gap(this, 8));
-        }
-
-        Ui.section(card, Ui.t("Экран", "Screen"));
-        Button cutout = Ui.button(this, cutoutLabel(), false);
-        cutout.setOnClickListener(new View.OnClickListener() {
-            public void onClick(View v) {
-                String next = "short";
-                String cur = cutoutMode();
-                if (cur.equals("short")) next = "never";
-                else if (cur.equals("never")) next = "always";
-                try {
-                    Files.write(new File(getFilesDir(), "cutout.txt").toPath(), (next + "\n").getBytes(StandardCharsets.UTF_8));
-                } catch (Exception ignored) {
-                }
-                HorizonActivity.applyCutout(ProfileActivity.this);
-                ((Button) v).setText(cutoutLabel());
+                updateStatus.setText(Ui.t("Доступна новая версия ", "New version available: ") + release.version);
+                update.setText(Ui.t("Обновить до ", "Update to ") + release.version);
+                update.setVisibility(View.VISIBLE);
+                update.setOnClickListener(new View.OnClickListener() {
+                    public void onClick(View v) {
+                        update.setEnabled(false);
+                        Updater.install(ProfileActivity.this, release, new Updater.Progress() {
+                            public void status(String text, boolean finished) {
+                                update.setText(text);
+                                if (finished) update.setEnabled(true);
+                            }
+                        });
+                    }
+                });
             }
         });
-        card.addView(cutout, Ui.gap(this, 4));
 
+        Ui.section(card, Ui.t("Настройки VR", "VR settings"));
+        card.addView(Ui.text(this, Ui.t(
+                "Резкая картинка и столько чанков, сколько игра рисует плавно.",
+                "A sharp image, with as many chunks as the game draws smoothly."),
+                12, Ui.MUTED, false));
+        final Button paceButton = Ui.button(this, "", false);
+        final boolean[] pace = {vrSetting("pace", 1) != 0};
+        // One mode, Quality: a sharp image with the chunks it can draw smoothly. Applied once
+        // (the game's options can still be changed in the game afterwards).
+        if (!"quality".equals(vrMode()) || vrSetting("scale", 0) < 1.35f) applyMode("quality", pace[0]);
+        final Runnable showVr = new Runnable() {
+            public void run() {
+                paceButton.setText(Ui.t("Ровные кадры: ", "Frame pacing: ") + (pace[0] ? "Auto" : "Off"));
+            }
+        };
+        showVr.run();
+        paceButton.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                pace[0] = !pace[0];
+                saveVr(1.4f, 90, pace[0]);
+                showVr.run();
+            }
+        });
+        card.addView(Ui.text(this, "Quality · 1.4x · 90 Hz · 6 chunks · anisotropic 8x", 13, Ui.TEXT, true));
+        card.addView(paceButton, Ui.gap(this, 6));
+        card.addView(Ui.text(this, Ui.t(
+                "Ровные кадры: если игра не успевает, она рисует каждый второй кадр ровно, без рывков.",
+                "Frame pacing: when the game cannot keep up, it draws every second frame evenly instead of unevenly, without micro-stutter."),
+                12, Ui.MUTED, false));
+
+        // Horizon VR: no Vulkan driver choice (the headset's runtime always uses the system's)
+        // and no screen cutout setting (the headset has no cutout).
         Ui.section(card, Ui.t("Моды", "Mods"));
         card.addView(Ui.text(this, Ui.t(
                 ".hnmod со сборкой для Android или .hmod. Или положите файл в Android/data/dev.horizonlab.horizon/files/mods/.",
@@ -428,7 +350,7 @@ public class ProfileActivity extends Activity implements View.OnClickListener {
         if (mode.equals("performance")) {
             scale = 0.8f; hz = 72; distance = 12; simulation = 8; clouds = "\"false\""; particles = "1"; biome = 1; entities = "1.0";
         } else if (mode.equals("quality")) {
-            scale = 1.2f; hz = 72; distance = 6; simulation = 6; clouds = "\"true\""; particles = "0"; biome = 3; entities = "1.0";
+            scale = 1.4f; hz = 90; distance = 6; simulation = 6; clouds = "\"true\""; particles = "0"; biome = 3; entities = "1.0";
         } else {
             scale = 1.0f; hz = 72; distance = 9; simulation = 8; clouds = "\"fast\""; particles = "0"; biome = 2; entities = "1.0";
         }
@@ -471,7 +393,7 @@ public class ProfileActivity extends Activity implements View.OnClickListener {
 
     private void saveVr(float scale, int hz, boolean pace) {
         try (java.io.FileWriter w = new java.io.FileWriter(vrFile())) {
-            w.write(String.format(java.util.Locale.ROOT, "scale=%.1f\nhz=%d\npace=%d\n", scale, hz, pace ? 1 : 0));
+            w.write(String.format(java.util.Locale.ROOT, "mode=quality\nscale=%.1f\nhz=%d\npace=%d\n", scale, hz, pace ? 1 : 0));
         } catch (Exception ignored) {
         }
     }
