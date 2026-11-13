@@ -665,6 +665,8 @@ impl super::Game<'_> {
             let yaw = self.yaw + ((yaw - self.yaw + 180.0).rem_euclid(360.0) - 180.0);
             let turn = [f64::from(yaw - self.yaw), f64::from(pitch - self.pitch)].map(|d| d / 0.15);
             self.turn_player(turn[0], turn[1]);
+            // The game's own turn: not a turn of the body for the headset's view.
+            horizon_xr::sync_yaw(self.yaw);
             return;
         }
         horizon_xr::note_controller_setting(self.settings.controller.enabled);

@@ -1254,12 +1254,21 @@ pub fn end_frame(queue: &wgpu::Queue) {
         let layer = xr::CompositionLayerProjection::new()
             .space(&s.local)
             .views(&projection_views);
-        // The compositor's sharpening on the eyes' layer, chained to it.
+        // The compositor's filter on the eyes' layer, chained to it: super sampling by default,
+        // which calms the far blocks' shimmer. Its sharpening ringed fine far detail with halos
+        // (from about five blocks away). `HORIZON_XR_FILTER`: `sharpen`, `normal` or `none`.
+        let filter = match std::env::var("HORIZON_XR_FILTER").as_deref() {
+            Ok("sharpen") => Some(xr::sys::CompositionLayerSettingsFlagsFB::QUALITY_SHARPENING),
+            Ok("normal") => Some(xr::sys::CompositionLayerSettingsFlagsFB::NORMAL_SUPER_SAMPLING),
+            Ok("none") => None,
+            _ => Some(xr::sys::CompositionLayerSettingsFlagsFB::QUALITY_SUPER_SAMPLING),
+        };
         let settings = xr::sys::CompositionLayerSettingsFB {
             ty: xr::sys::CompositionLayerSettingsFB::TYPE,
             next: std::ptr::null(),
-            layer_flags: xr::sys::CompositionLayerSettingsFlagsFB::QUALITY_SHARPENING,
+            layer_flags: filter.unwrap_or(xr::sys::CompositionLayerSettingsFlagsFB::EMPTY),
         };
+        let sharpen = sharpen && filter.is_some();
         let mut raw = *layer.as_raw();
         if sharpen {
             raw.next = (&settings as *const xr::sys::CompositionLayerSettingsFB).cast();
@@ -1524,6 +1533,15 @@ fn draw_cross(device: &wgpu::Device, queue: &wgpu::Queue, blit: &blit::Blit, cha
             log::warn!("Horizon VR: crosshair: {e}");
             false
         }
+    }
+}
+
+/// The game turned the player itself (toward a mob being hit, a block being mined, a bow's
+/// aim): `look` takes `yaw` as where the player now faces, not as a stick's turn of the body,
+/// which would leave the view turned away once the hand lets go.
+pub fn sync_yaw(yaw: f32) {
+    if let Some(s) = xr_state().as_mut().and_then(|x| x.session.as_mut()) {
+        s.last_yaw = Some(yaw);
     }
 }
 

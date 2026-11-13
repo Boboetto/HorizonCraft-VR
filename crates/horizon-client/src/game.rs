@@ -15176,8 +15176,14 @@ impl Game<'_> {
             } else {
                 to_world * native_hooks::hand_pose_matrix(pose)
             };
-            // The main hand on its arm, the off hand on the other one.
-            let left = self.settings.main_hand_left != (hand == Hand::Off);
+            // The main hand on its arm, the off hand on the other one (VR: the controller it
+            // is drawn on, a bow on the left).
+            let left = if vr_frame.is_some() { vr_left } else { self.settings.main_hand_left != (hand == Hand::Off) };
+            // VR: with a menu open the arms go. The menu's panel is laid over the eyes' image,
+            // so an arm before it still showed behind it, and one beside it looked farther.
+            if vr_frame.is_some() && (self.screen != Screen::Playing || self.title.is_some()) {
+                continue;
+            }
             // A Legacy sword held up hides the off hand's shield.
             if hand == Hand::Off && legacy_block {
                 continue;
@@ -15313,7 +15319,7 @@ impl Game<'_> {
             };
             let base = horizon_client::first_person::item_pose(left, inverse_height, attack, pose);
             let mut m = match vr_frame {
-                Some(frame) => frame * vr_item_local(base),
+                Some(frame) => frame * vr_held_item(left),
                 None => to_world * base,
             };
             // PvP & HUD's shield size (100% is vanilla's), toward the hand holding it.
@@ -15322,16 +15328,12 @@ impl Game<'_> {
                 m *= glam::Mat4::from_scale(glam::Vec3::splat(f32::from(shield_size) / 100.0));
             }
             // Seeded by the player id plus the context ordinal.
-            let (context, seed) = if left {
-                (
-                    horizon_assets::item_model::DisplayContext::FirstPersonLeftHand,
-                    3,
-                )
-            } else {
-                (
-                    horizon_assets::item_model::DisplayContext::FirstPersonRightHand,
-                    4,
-                )
+            let (context, seed) = match (left, vr_frame.is_some()) {
+                // VR: held as another player holds it (`vr_held_item`), the same in either hand.
+                (true, true) => (horizon_assets::item_model::DisplayContext::ThirdPersonLeftHand, 3),
+                (false, true) => (horizon_assets::item_model::DisplayContext::ThirdPersonRightHand, 4),
+                (true, false) => (horizon_assets::item_model::DisplayContext::FirstPersonLeftHand, 3),
+                (false, false) => (horizon_assets::item_model::DisplayContext::FirstPersonRightHand, 4),
             };
             let cit_hand = if hand == Hand::Off {
                 horizon_client::cit::Hand::Off
@@ -17133,9 +17135,13 @@ impl Game<'_> {
         self.locator_camera =
             (!title).then_some((camera.to_array(), view_yaw, view_pitch, fov_degrees));
         let requested_post_effects = self.requested_post_effects();
+        // VR: the player's yaw follows the right hand's aim, not the head, so a frustum from it
+        // dropped mobs right before the eyes (while hitting with the hand turned away): in VR
+        // entities and block entities are not frustum-culled.
         self.view_frustum = self
             .renderer
             .as_ref()
+            .filter(|_| !vr_active())
             .map(|r| r.camera_frustum(fov_degrees, yaw, pitch, bob * spin, depth_far));
         // Keep the buffer local while builders need mutable access to the game.
         let mut entities = std::mem::take(&mut self.entity_vertices);
@@ -20346,8 +20352,8 @@ fn vr_hand_frame(left: bool) -> Option<glam::Mat4> {
 
 /// How long the player's arm is in VR, as a share of the model's (12 pixels).
 const VR_ARM_SCALE: f32 = 0.45;
-/// The held item's size in VR, as a share of the first-person view's.
-const VR_ITEM_SCALE: f32 = 0.5;
+/// The held item's size in VR, as a share of a player model's (a sword about 0.6 m long).
+const VR_ITEM_SCALE: f32 = 0.7;
 
 /// VR: the arm model (`first_person_arm`'s space: Minecraft's Y-down model, in
 /// blocks) straight back from the controller, its hand at the grip.
@@ -20363,11 +20369,24 @@ fn vr_arm_local(left: bool) -> glam::Mat4 {
         * Mat4::from_scale(Vec3::new(-1.0, -1.0, 1.0))
 }
 
-/// VR: the first-person item pose `base` (before the camera) moved onto the controller:
-/// where it sits before the camera becomes the grip, its tilt kept.
-fn vr_item_local(base: glam::Mat4) -> glam::Mat4 {
+/// VR: a held item in the controller's frame (the grip at the origin, -Z where it points, +Y
+/// up), drawn with the third-person hand display: in the fist, as `ItemInHandLayer` holds it on
+/// a player's arm, with the arm held out ahead. The model's axes map to the controller's by
+/// `scale(-1, -1, 1)` (the model faces -Z and is Y-down); the arm part turned -90° about X points
+/// ahead; its hand (the cube's lower end, 9 pixels down) sits at the grip; then the layer's own
+/// turn and offset. Left and right mirror each other.
+fn vr_held_item(left: bool) -> glam::Mat4 {
     use glam::{Mat4, Vec3};
-    Mat4::from_scale(Vec3::splat(VR_ITEM_SCALE)) * Mat4::from_translation(-base.w_axis.truncate()) * base
+    use std::f32::consts::{FRAC_PI_2, PI};
+    let px = 1.0 / 16.0;
+    let side = if left { 1.0 } else { -1.0 };
+    Mat4::from_scale(Vec3::splat(VR_ITEM_SCALE))
+        * Mat4::from_scale(Vec3::new(-1.0, -1.0, 1.0))
+        * Mat4::from_rotation_x(-FRAC_PI_2)
+        * Mat4::from_translation(-Vec3::new(side * px, 9.0 * px, 0.0))
+        * Mat4::from_rotation_x(-FRAC_PI_2)
+        * Mat4::from_rotation_y(PI)
+        * Mat4::from_translation(Vec3::new(if left { -px } else { px }, 2.0 * px, -10.0 * px))
 }
 /// VR is on (the headset shows the game).
 fn vr_active() -> bool {
