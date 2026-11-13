@@ -29,7 +29,7 @@ use wgpu::hal::vulkan as hv;
 
 /// Eye images are drawn at this fraction of the runtime's recommended size: the game
 /// is drawn twice per frame, and the Quest's recommended size is large.
-const RESOLUTION_SCALE: f32 = 0.7;
+const RESOLUTION_SCALE: f32 = 0.8;
 /// The farthest the head may lean away from where it started before the view stops
 /// following it, in metres (the player's body does not move with it).
 const MAX_LEAN: f32 = 0.5;
@@ -444,6 +444,8 @@ fn open_instance(ctx: &Context) -> Result<(wgpu::Instance, wgpu::Adapter), Strin
     wanted.fb_composition_layer_settings = available.fb_composition_layer_settings;
     // The headset's CPU and GPU clocks, held high (`set_performance_levels`).
     wanted.ext_performance_settings = available.ext_performance_settings;
+    // The display's refresh rate the player picked (`set_refresh_rate`).
+    wanted.fb_display_refresh_rate = available.fb_display_refresh_rate;
     let instance = entry
         .create_instance(
             &xr::ApplicationInfo {
@@ -605,6 +607,7 @@ pub fn open_device(
     match start_session(xr, &device, raw_device) {
         Ok(session) => {
             set_performance_levels(&xr.instance, &session.session);
+            set_refresh_rate(&xr.instance, &session.session);
             xr.session = Some(session);
         }
         Err(e) => log::error!("Horizon VR: no session: {e}"),
@@ -631,6 +634,24 @@ fn set_performance_levels(instance: &xr::Instance, session: &xr::Session<xr::Vul
         let result = unsafe { (ext.perf_settings_set_performance_level)(session.as_raw(), domain, level) };
         log::info!("Horizon VR: performance level {level:?} for {domain:?}: {result:?}");
     }
+}
+
+/// The display's refresh rate from `HORIZON_XR_HZ` (the launcher's VR settings): the offered
+/// rate nearest to it (the Quest 3 offers 72, 80, 90 and 120 Hz). Unset leaves the default.
+fn set_refresh_rate(instance: &xr::Instance, session: &xr::Session<xr::Vulkan>) {
+    let Some(wanted) = std::env::var("HORIZON_XR_HZ").ok().and_then(|v| v.trim().parse::<f32>().ok()) else {
+        return;
+    };
+    if instance.exts().fb_display_refresh_rate.is_none() {
+        log::info!("Horizon VR: no XR_FB_display_refresh_rate");
+        return;
+    }
+    let rates = session.enumerate_display_refresh_rates().unwrap_or_default();
+    let Some(rate) = rates.iter().copied().min_by(|a, b| (a - wanted).abs().total_cmp(&(b - wanted).abs())) else {
+        return;
+    };
+    let result = session.request_display_refresh_rate(rate);
+    log::info!("Horizon VR: refresh rate {rate} Hz of {rates:?} (asked {wanted}): {result:?}");
 }
 
 type Opened = Result<(wgpu::Device, wgpu::Queue, vk::Device), wgpu::RequestDeviceError>;
@@ -706,7 +727,8 @@ fn start_session(xr: &Xr, device: &wgpu::Device, raw_device: vk::Device) -> Resu
         views[0].recommended_image_rect_width,
         views[0].recommended_image_rect_height,
     ];
-    // `HORIZON_XR_SCALE` (0.4..1.4): another share of the recommended size, to measure.
+    // `HORIZON_XR_SCALE` (0.4..1.4): another share of the recommended size (the launcher's
+    // VR settings, `horizon-vr.txt`, or a measurement).
     let scale = std::env::var("HORIZON_XR_SCALE")
         .ok()
         .and_then(|v| v.trim().parse::<f32>().ok())

@@ -50,6 +50,22 @@ fn android_main(app: AndroidApp) {
     for dir in ["saves", "resourcepacks", "mods", "shaderpacks"] {
         let _ = std::fs::create_dir_all(home.join(dir));
     }
+    // The launcher's VR settings (ProfileActivity): `scale=` and `hz=` lines in horizon-vr.txt.
+    if let Ok(text) = std::fs::read_to_string(home.join("horizon-vr.txt")) {
+        for (key, var) in [("scale", "HORIZON_XR_SCALE"), ("hz", "HORIZON_XR_HZ")] {
+            let value = text
+                .lines()
+                .filter_map(|l| l.split_once('='))
+                .find(|(k, _)| k.trim() == key)
+                .map(|(_, v)| v.trim().to_string());
+            if let Some(value) = value.filter(|v| v.parse::<f32>().is_ok())
+                && std::env::var_os(var).is_none()
+            {
+                // SAFETY: still before the game starts its threads.
+                unsafe { std::env::set_var(var, value) };
+            }
+        }
+    }
     // Before logging starts its thread: these become environment variables.
     let remote_env = android_logs::apply_remote_env();
     logging::init(&home, "Render thread");

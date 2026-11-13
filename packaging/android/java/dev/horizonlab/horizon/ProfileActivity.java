@@ -143,6 +143,82 @@ public class ProfileActivity extends Activity implements View.OnClickListener {
         rightLp.leftMargin = Ui.dp(this, 14);
         root.addView(scroll, rightLp);
 
+        // Horizon VR's own settings and updates.
+        Ui.section(card, Ui.t("Обновления", "Updates"));
+        final TextView updateStatus = Ui.text(this, "Horizon VR v" + Updater.installed(this)
+                + Ui.t(" · проверка…", " · checking…"), 14, Ui.TEXT, true);
+        card.addView(updateStatus);
+        final Button update = Ui.button(this, "", true);
+        update.setVisibility(View.GONE);
+        card.addView(update, Ui.gap(this, 6));
+        Updater.check(this, new Updater.Found() {
+            public void found(final Updater.Release release) {
+                if (release == null) {
+                    updateStatus.setText("Horizon VR v" + Updater.installed(ProfileActivity.this)
+                            + Ui.t(" · последняя версия", " · up to date"));
+                    return;
+                }
+                updateStatus.setText(Ui.t("Доступна новая версия ", "New version available: ") + release.version);
+                update.setText(Ui.t("Обновить до ", "Update to ") + release.version);
+                update.setVisibility(View.VISIBLE);
+                update.setOnClickListener(new View.OnClickListener() {
+                    public void onClick(View v) {
+                        update.setEnabled(false);
+                        Updater.install(ProfileActivity.this, release, new Updater.Progress() {
+                            public void status(String text, boolean finished) {
+                                update.setText(text);
+                                if (finished) update.setEnabled(true);
+                            }
+                        });
+                    }
+                });
+            }
+        });
+
+        Ui.section(card, Ui.t("Настройки VR", "VR settings"));
+        card.addView(Ui.text(this, Ui.t(
+                "Выше разрешение: чётче, но ниже FPS. Применяется при следующем запуске игры.",
+                "Higher resolution looks sharper but lowers the FPS. Applies the next time the game starts."),
+                12, Ui.MUTED, false));
+        final float[] scales = {0.6f, 0.7f, 0.8f, 0.9f, 1.0f, 1.1f, 1.2f, 1.3f};
+        final int[] rates = {72, 80, 90, 120};
+        final Button scaleButton = Ui.button(this, "", false);
+        final Button rateButton = Ui.button(this, "", false);
+        final float[] scale = {vrSetting("scale", 0.8f)};
+        final int[] rate = {(int) vrSetting("hz", 72)};
+        final Runnable showVr = new Runnable() {
+            public void run() {
+                scaleButton.setText(Ui.t("Разрешение: ", "Resolution: ") + String.format(java.util.Locale.ROOT, "%.1fx", scale[0]));
+                rateButton.setText(Ui.t("Частота: ", "Refresh rate: ") + rate[0] + " Hz");
+            }
+        };
+        showVr.run();
+        scaleButton.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                int next = 0;
+                for (int i = 0; i < scales.length; i++) if (Math.abs(scales[i] - scale[0]) < 0.01f) next = (i + 1) % scales.length;
+                scale[0] = scales[next];
+                saveVr(scale[0], rate[0]);
+                showVr.run();
+            }
+        });
+        rateButton.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                int next = 0;
+                for (int i = 0; i < rates.length; i++) if (rates[i] == rate[0]) next = (i + 1) % rates.length;
+                rate[0] = rates[next];
+                saveVr(scale[0], rate[0]);
+                showVr.run();
+            }
+        });
+        LinearLayout vrRow = new LinearLayout(this);
+        vrRow.setOrientation(LinearLayout.HORIZONTAL);
+        vrRow.addView(scaleButton, new LinearLayout.LayoutParams(0, -2, 1));
+        LinearLayout.LayoutParams vl = new LinearLayout.LayoutParams(0, -2, 1);
+        vl.leftMargin = Ui.dp(this, 8);
+        vrRow.addView(rateButton, vl);
+        card.addView(vrRow, Ui.gap(this, 6));
+
         Ui.section(card, Ui.t("Аккаунт Microsoft", "Microsoft account"));
         accountStatus = Ui.text(this, accountLine(), 15, Ui.TEXT, true);
         card.addView(accountStatus);
@@ -295,6 +371,30 @@ public class ProfileActivity extends Activity implements View.OnClickListener {
                 c.hide(android.view.WindowInsets.Type.systemBars());
                 c.setSystemBarsBehavior(android.view.WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
             }
+        }
+    }
+
+    /** horizon-vr.txt in the game folder: the VR settings the game reads at start (android_main). */
+    private File vrFile() {
+        return new File(SetupActivity.home(this), "horizon-vr.txt");
+    }
+
+    private float vrSetting(String key, float fallback) {
+        try (java.io.BufferedReader r = new java.io.BufferedReader(new java.io.FileReader(vrFile()))) {
+            String line;
+            while ((line = r.readLine()) != null) {
+                String[] kv = line.split("=", 2);
+                if (kv.length == 2 && kv[0].trim().equals(key)) return Float.parseFloat(kv[1].trim());
+            }
+        } catch (Exception ignored) {
+        }
+        return fallback;
+    }
+
+    private void saveVr(float scale, int hz) {
+        try (java.io.FileWriter w = new java.io.FileWriter(vrFile())) {
+            w.write(String.format(java.util.Locale.ROOT, "scale=%.1f\nhz=%d\n", scale, hz));
+        } catch (Exception ignored) {
         }
     }
 
