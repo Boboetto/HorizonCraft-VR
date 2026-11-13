@@ -29,10 +29,10 @@ It plays Minecraft: Java Edition 26.3 in VR, with motion controls in the spirit 
 - A crosshair for each hand, lying on the face of the block it aims at
 - The left trigger uses and places along the left hand while the right trigger attacks along the right one
 - Gestures: swing a sword at a mob, strike blocks with a tool to mine, bring food to the mouth to eat,
-  arm strokes to swim where you look, two-handed bow
+  breaststroke to swim where you look, two-handed bow
 - Menus on a panel in the room with a pointer for each hand, 360° title panorama
 - Walk where you look with the left stick, turn with the right one
-- VR settings in the launcher: render resolution 0.6x–1.3x (0.8x by default) and refresh rate 72/80/90/120 Hz
+- Three modes in the launcher (Performance, Balanced, Quality) that set the resolution, refresh rate and the game's heaviest options, plus frame pacing against micro-stutter
 - In-app updates: the launcher shows an **Update** button when a new release is out
 
 ## Controls
@@ -44,13 +44,15 @@ It plays Minecraft: Java Edition 26.3 in VR, with motion controls in the spirit 
 | Right trigger | attack / mine / pick a wrist slot | click with the right pointer |
 | Left trigger | use / place along the left hand | click with the left pointer |
 | A | jump | confirm |
-| B | – | back |
+| B | – | back; in an inventory or container: quick move (craft all, send the stack to the other side) |
 | Y | inventory | close the inventory |
 | X | drop one item | drop one item (carried stack or slot) |
 | X held + Y | drop the rest of the stack | drop the rest of the stack |
 | Left grip | swap the item with the off hand | – |
 | Both grips | debug screen (F3) | – |
 | Right grip | – | place one item of the carried stack; with the trigger: quick move |
+| Left grip (in a container) | – | take half of the stack |
+| Both grips (in a container) | – | move every stack of that item to the other side |
 | Left / right stick click | sprint / sneak | – |
 | Menu button | pause | – |
 
