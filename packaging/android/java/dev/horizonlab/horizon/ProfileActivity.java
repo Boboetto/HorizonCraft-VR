@@ -196,10 +196,10 @@ public class ProfileActivity extends Activity implements View.OnClickListener {
                         : mode[0].equals("quality") ? "Quality" : "Balanced";
                 modeButton.setText(Ui.t("Режим: ", "Mode: ") + name);
                 modeInfo.setText(mode[0].equals("performance")
-                        ? "0.8x · 72 Hz · 8 chunks · no clouds"
+                        ? "Most chunks, softer image: 0.8x · 12 chunks · no clouds"
                         : mode[0].equals("quality")
-                                ? "1.2x · 90 Hz · 14 chunks · fancy clouds · anisotropic 8x"
-                                : "1.0x · 72 Hz · 10 chunks · fast clouds · anisotropic 4x");
+                                ? "Sharpest image, fewer chunks: 1.2x · 6 chunks · fancy clouds · anisotropic 8x"
+                                : "Between the two: 1.0x · 9 chunks · fast clouds · anisotropic 4x");
                 paceButton.setText(Ui.t("Ровные кадры: ", "Frame pacing: ") + (pace[0] ? "Auto" : "Off"));
             }
         };
@@ -423,12 +423,14 @@ public class ProfileActivity extends Activity implements View.OnClickListener {
         // Anisotropic filtering keeps far, slanted block faces sharp (textureFiltering 2).
         int filtering = mode.equals("performance") ? 0 : 2;
         int anisotropy = mode.equals("quality") ? 3 : 2;
+        // All three play smoothly at 72 Hz: Quality spends the GPU on a sharper image and keeps
+        // fewer chunks, Performance spends it on chunks with a softer image, Balanced sits between.
         if (mode.equals("performance")) {
-            scale = 0.8f; hz = 72; distance = 8; simulation = 6; clouds = "\"false\""; particles = "1"; biome = 1; entities = "0.75";
+            scale = 0.8f; hz = 72; distance = 12; simulation = 8; clouds = "\"false\""; particles = "1"; biome = 1; entities = "1.0";
         } else if (mode.equals("quality")) {
-            scale = 1.2f; hz = 90; distance = 14; simulation = 10; clouds = "\"true\""; particles = "0"; biome = 3; entities = "1.0";
+            scale = 1.2f; hz = 72; distance = 6; simulation = 6; clouds = "\"true\""; particles = "0"; biome = 3; entities = "1.0";
         } else {
-            scale = 1.0f; hz = 72; distance = 10; simulation = 8; clouds = "\"fast\""; particles = "0"; biome = 2; entities = "1.0";
+            scale = 1.0f; hz = 72; distance = 9; simulation = 8; clouds = "\"fast\""; particles = "0"; biome = 2; entities = "1.0";
         }
         try (java.io.FileWriter w = new java.io.FileWriter(vrFile())) {
             w.write(String.format(java.util.Locale.ROOT, "mode=%s\nscale=%.1f\nhz=%d\npace=%d\n", mode, scale, hz, pace ? 1 : 0));
