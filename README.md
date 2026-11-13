@@ -32,6 +32,8 @@ It plays Minecraft: Java Edition 26.3 in VR, with motion controls in the spirit 
   arm strokes to swim where you look, two-handed bow
 - Menus on a panel in the room with a pointer for each hand, 360° title panorama
 - Walk where you look with the left stick, turn with the right one
+- VR settings in the launcher: render resolution 0.6x–1.3x (0.8x by default) and refresh rate 72/80/90/120 Hz
+- In-app updates: the launcher shows an **Update** button when a new release is out
 
 ## Controls
 
@@ -69,6 +71,8 @@ Press **Download game files** and wait a few minutes, on Wi-Fi:
 1. the headset downloads the official Minecraft: Java Edition 26.3 files from Mojang (about 700 MB);
 2. Horizon VR prepares its game data on the headset itself, with a Java runtime built into the app (about a minute);
 3. the game starts. Next time it opens straight away.
+
+Later updates: tap **Update** in the launcher's *Updates* section and confirm the install (allow installs from Horizon VR the first time). Your worlds stay.
 
 No computer needed after installing. You need to own Minecraft: Java Edition.
 
