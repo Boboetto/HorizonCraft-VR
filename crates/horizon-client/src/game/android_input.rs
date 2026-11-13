@@ -121,7 +121,8 @@ pub(super) fn pad_state() -> PadState {
 fn with_touch_controllers(mut pad: PadState, touch: horizon_xr::Pad) -> PadState {
     for (held, button) in [
         (touch.a, Button::South),
-        (touch.b, Button::East),
+        // In an inventory or a container B quick-moves (`xr_buttons`); Y closes it.
+        (touch.b && !CONTAINER_SCREEN.load(std::sync::atomic::Ordering::Relaxed), Button::East),
         // Y with X held throws the rest of the stack (`xr_buttons`), it opens nothing.
         (touch.y && !touch.x, Button::North),
         (touch.menu, Button::Start),
@@ -191,6 +192,18 @@ pub(super) fn take_used() -> (bool, bool) {
     s.keyboard_used = false;
     s.mouse_used = false;
     used
+}
+
+/// VR: an inventory or container screen is open: B quick-moves there instead of going back.
+static CONTAINER_SCREEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// VR: clicks queued with Shift held (`xr_buttons`); Shift lets go once they are handled.
+static SHIFT_ONCE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// VR: the hand strikes by itself (a blow into a block, a swing at a mob), for the arm's swing.
+static GESTURE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Whether a gesture (not the trigger) is attacking or mining now.
+pub(super) fn xr_gesture_active() -> bool {
+    GESTURE.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 /// VR: a bow is held, so the right trigger draws its string (`xr_bow`), never attacks.
@@ -543,9 +556,9 @@ impl super::Game<'_> {
             None => None,
         }
     }
-    /// VR: swimming by arm strokes. In water, hands pulled back (against where the head
-    /// looks) at more than half a metre a second push the player where the head looks, as
-    /// hard as they pull; water's drag slows them again as usual.
+    /// VR: swimming by breaststroke. In water, hands sweeping outward (and back) at more than
+    /// half a metre a second push the player where the head looks, as hard as they sweep;
+    /// water's drag slows them again as usual.
     fn xr_swim(&mut self) {
         use std::time::Instant;
         static LAST: Mutex<Option<(Instant, [Option<glam::Vec3>; 2])>> = Mutex::new(None);
@@ -569,10 +582,17 @@ impl super::Game<'_> {
         if !(0.001..0.1).contains(&dt) {
             return;
         }
-        // Metres a second the hands pull back, the stronger one.
+        // Breaststroke: the hands circle from the middle outward (the right one clockwise, the
+        // left one anticlockwise, seen from above), so each sweeps out to its side and back.
+        // Metres a second of that sweep, the stronger hand.
+        let ahead = glam::Vec3::new(forward.x, 0.0, forward.z).normalize_or(glam::Vec3::NEG_Z);
+        let right = ahead.cross(glam::Vec3::Y).normalize_or(glam::Vec3::X);
         let pull = (0..2)
-            .filter_map(|i| Some((hands[i]? - before[i]?) / dt))
-            .map(|v| (-v.dot(forward)).max(0.0))
+            .filter_map(|i| Some((i, (hands[i]? - before[i]?) / dt)))
+            .map(|(i, v)| {
+                let outward = if i == 1 { right } else { -right };
+                v.dot(outward).max(0.0) + 0.5 * (-v.dot(ahead)).max(0.0)
+            })
             .fold(0.0f32, f32::max);
         if pull < 0.5 {
             return;
@@ -655,6 +675,7 @@ impl super::Game<'_> {
         } else {
             (self.xr_swing(tip), self.xr_hand_actions(tip))
         };
+        GESTURE.store(swing.is_some() || hand.is_some(), std::sync::atomic::Ordering::Relaxed);
         if let Some(at) = bow.or(swing).or(hand)
             && let Some(eye) = self.eye_position()
         {
@@ -823,7 +844,11 @@ impl super::Game<'_> {
         let Some(pad) = horizon_xr::pad() else {
             return;
         };
-        let now = u8::from(pad.x) | u8::from(pad.y) << 1 | u8::from(pad.left_grip) << 2 | u8::from(pad.right_grip) << 3;
+        let now = u8::from(pad.x)
+            | u8::from(pad.y) << 1
+            | u8::from(pad.left_grip) << 2
+            | u8::from(pad.right_grip) << 3
+            | u8::from(pad.b) << 5;
         let before = HELD.load(Ordering::Relaxed);
         let pressed = |bit: u8| now & bit != 0 && before & bit == 0;
         let released = |bit: u8| now & bit == 0 && before & bit != 0;
@@ -832,6 +857,8 @@ impl super::Game<'_> {
             chord = 16;
         }
         let in_menu = self.title.is_none() && self.screen != super::Screen::Playing;
+        let container = in_menu && matches!(self.screen, super::Screen::Inventory | super::Screen::Creative);
+        CONTAINER_SCREEN.store(container, Ordering::Relaxed);
         let playing = self.title.is_none() && self.screen == super::Screen::Playing;
         let throw = if pressed(1) {
             Some(false)
@@ -862,10 +889,34 @@ impl super::Game<'_> {
                 self.modifiers = modifiers;
             }
         }
-        if in_menu && pressed(8) && self.carried.is_some() {
-            let mut s = shared();
-            s.mouse.push(MouseInput::Button(1, true));
-            s.mouse.push(MouseInput::Button(1, false));
+        // In an inventory or a container, where the pointer is:
+        // - B quick-moves (Shift + click): crafts the whole result, or sends the stack to the
+        //   other side, the fuel to the furnace's fuel slot and so on;
+        // - both grips move every stack of that item to the other side (Shift + double click);
+        // - the left grip alone takes half the stack (right click), the right grip alone puts
+        //   one item of the carried stack down (right click).
+        if container {
+            let mut clicks: Vec<(u8, bool)> = Vec::new();
+            if pressed(32) {
+                clicks = vec![(0, true), (0, false)];
+            } else if now & 12 == 12 && before & 12 != 12 {
+                clicks = vec![(0, true), (0, false), (0, true), (0, false)];
+            }
+            if !clicks.is_empty() {
+                self.modifiers = ModifiersState::SHIFT;
+                SHIFT_ONCE.store(true, Ordering::Relaxed);
+                let mut s = shared();
+                for (button, down) in clicks {
+                    s.mouse.push(MouseInput::Button(button, down));
+                }
+            }
+            let right_click = (released(4) && chord == 0 && self.carried.is_none())
+                || (released(8) && chord == 0 && self.carried.is_some());
+            if right_click {
+                let mut s = shared();
+                s.mouse.push(MouseInput::Button(1, true));
+                s.mouse.push(MouseInput::Button(1, false));
+            }
         }
         if playing && now & 12 == 12 && before & 12 != 12 {
             use horizon_client::debug_keys::KeyAction;
@@ -874,12 +925,9 @@ impl super::Game<'_> {
             self.physical_keys.remove(&KeyCode::F3);
             self.debug_key(KeyCode::F3, KeyAction::Release);
         }
-        if released(4) {
-            if playing && chord == 0 {
-                // key.swapOffhand (F): the held item to the left hand and back.
-                let _ = self.key_pressed(KeyCode::KeyF, KeyCode::KeyF);
-            }
-            chord = 0;
+        if released(4) && playing && chord == 0 {
+            // key.swapOffhand (F): the held item to the left hand and back.
+            let _ = self.key_pressed(KeyCode::KeyF, KeyCode::KeyF);
         }
         if now & 4 == 0 && now & 8 == 0 {
             chord = 0;
@@ -946,6 +994,9 @@ impl super::Game<'_> {
                 },
             };
             self.handle_window_event(event_loop, window_id, event, super::input_trace::InputOrigin::User);
+        }
+        if SHIFT_ONCE.swap(false, std::sync::atomic::Ordering::Relaxed) {
+            self.modifiers = winit::keyboard::ModifiersState::empty();
         }
         // The pointer is captured for turning the view, and let go in menus.
         let capture = self.touch.mouse && self.focused && self.player.is_some() && !self.pad_in_menu();

@@ -177,57 +177,51 @@ public class ProfileActivity extends Activity implements View.OnClickListener {
 
         Ui.section(card, Ui.t("Настройки VR", "VR settings"));
         card.addView(Ui.text(this, Ui.t(
-                "Выше разрешение: чётче, но ниже FPS. Применяется при следующем запуске игры.",
-                "Higher resolution looks sharper but lowers the FPS. Applies the next time the game starts."),
+                "Режим задаёт разрешение, частоту и настройки игры (дальность, облака, частицы). Применяется при следующем запуске игры.",
+                "The mode sets the resolution, the refresh rate and the game's heaviest settings (render distance, clouds, particles). Applies the next time the game starts."),
                 12, Ui.MUTED, false));
-        final float[] scales = {0.6f, 0.7f, 0.8f, 0.9f, 1.0f, 1.1f, 1.2f, 1.3f};
-        final int[] rates = {72, 80, 90, 120};
-        final Button scaleButton = Ui.button(this, "", false);
-        final Button rateButton = Ui.button(this, "", false);
+        final String[] modes = {"performance", "balanced", "quality"};
+        final Button modeButton = Ui.button(this, "", false);
         final Button paceButton = Ui.button(this, "", false);
+        final TextView modeInfo = Ui.text(this, "", 12, Ui.MUTED, false);
         final boolean[] pace = {vrSetting("pace", 1) != 0};
-        final float[] scale = {vrSetting("scale", 0.8f)};
-        final int[] rate = {(int) vrSetting("hz", 72)};
+        final String[] mode = {vrMode()};
+        if (mode[0] == null) {
+            mode[0] = "balanced";
+            applyMode(mode[0], pace[0]);
+        }
         final Runnable showVr = new Runnable() {
             public void run() {
-                scaleButton.setText(Ui.t("Разрешение: ", "Resolution: ") + String.format(java.util.Locale.ROOT, "%.1fx", scale[0]));
-                rateButton.setText(Ui.t("Частота: ", "Refresh rate: ") + rate[0] + " Hz");
+                String name = mode[0].equals("performance") ? "Performance"
+                        : mode[0].equals("quality") ? "Quality" : "Balanced";
+                modeButton.setText(Ui.t("Режим: ", "Mode: ") + name);
+                modeInfo.setText(mode[0].equals("performance")
+                        ? "0.8x · 72 Hz · 8 chunks · no clouds"
+                        : mode[0].equals("quality")
+                                ? "1.2x · 90 Hz · 14 chunks · fancy clouds · anisotropic 8x"
+                                : "1.0x · 72 Hz · 10 chunks · fast clouds · anisotropic 4x");
                 paceButton.setText(Ui.t("Ровные кадры: ", "Frame pacing: ") + (pace[0] ? "Auto" : "Off"));
             }
         };
         showVr.run();
-        scaleButton.setOnClickListener(new View.OnClickListener() {
+        modeButton.setOnClickListener(new View.OnClickListener() {
             public void onClick(View v) {
                 int next = 0;
-                for (int i = 0; i < scales.length; i++) if (Math.abs(scales[i] - scale[0]) < 0.01f) next = (i + 1) % scales.length;
-                scale[0] = scales[next];
-                saveVr(scale[0], rate[0], pace[0]);
-                showVr.run();
-            }
-        });
-        rateButton.setOnClickListener(new View.OnClickListener() {
-            public void onClick(View v) {
-                int next = 0;
-                for (int i = 0; i < rates.length; i++) if (rates[i] == rate[0]) next = (i + 1) % rates.length;
-                rate[0] = rates[next];
-                saveVr(scale[0], rate[0], pace[0]);
+                for (int i = 0; i < modes.length; i++) if (modes[i].equals(mode[0])) next = (i + 1) % modes.length;
+                mode[0] = modes[next];
+                applyMode(mode[0], pace[0]);
                 showVr.run();
             }
         });
         paceButton.setOnClickListener(new View.OnClickListener() {
             public void onClick(View v) {
                 pace[0] = !pace[0];
-                saveVr(scale[0], rate[0], pace[0]);
+                applyMode(mode[0], pace[0]);
                 showVr.run();
             }
         });
-        LinearLayout vrRow = new LinearLayout(this);
-        vrRow.setOrientation(LinearLayout.HORIZONTAL);
-        vrRow.addView(scaleButton, new LinearLayout.LayoutParams(0, -2, 1));
-        LinearLayout.LayoutParams vl = new LinearLayout.LayoutParams(0, -2, 1);
-        vl.leftMargin = Ui.dp(this, 8);
-        vrRow.addView(rateButton, vl);
-        card.addView(vrRow, Ui.gap(this, 6));
+        card.addView(modeButton, Ui.gap(this, 6));
+        card.addView(modeInfo);
         card.addView(paceButton, Ui.gap(this, 6));
         card.addView(Ui.text(this, Ui.t(
                 "Ровные кадры: если игра не успевает, она рисует каждый второй кадр ровно, без рывков.",
@@ -404,6 +398,73 @@ public class ProfileActivity extends Activity implements View.OnClickListener {
         } catch (Exception ignored) {
         }
         return fallback;
+    }
+
+    /** The mode saved in horizon-vr.txt, or null before one was chosen. */
+    private String vrMode() {
+        try (java.io.BufferedReader r = new java.io.BufferedReader(new java.io.FileReader(vrFile()))) {
+            String line;
+            while ((line = r.readLine()) != null) {
+                if (line.startsWith("mode=")) return line.substring(5).trim();
+            }
+        } catch (Exception ignored) {
+        }
+        return null;
+    }
+
+    /**
+     * A mode: the headset's resolution and refresh rate (horizon-vr.txt, read by the game at
+     * start) and the game's heaviest options (options.txt in the game folder).
+     */
+    private void applyMode(String mode, boolean pace) {
+        float scale;
+        int hz, distance, simulation, biome;
+        String clouds, particles, entities;
+        // Anisotropic filtering keeps far, slanted block faces sharp (textureFiltering 2).
+        int filtering = mode.equals("performance") ? 0 : 2;
+        int anisotropy = mode.equals("quality") ? 3 : 2;
+        if (mode.equals("performance")) {
+            scale = 0.8f; hz = 72; distance = 8; simulation = 6; clouds = "\"false\""; particles = "1"; biome = 1; entities = "0.75";
+        } else if (mode.equals("quality")) {
+            scale = 1.2f; hz = 90; distance = 14; simulation = 10; clouds = "\"true\""; particles = "0"; biome = 3; entities = "1.0";
+        } else {
+            scale = 1.0f; hz = 72; distance = 10; simulation = 8; clouds = "\"fast\""; particles = "0"; biome = 2; entities = "1.0";
+        }
+        try (java.io.FileWriter w = new java.io.FileWriter(vrFile())) {
+            w.write(String.format(java.util.Locale.ROOT, "mode=%s\nscale=%.1f\nhz=%d\npace=%d\n", mode, scale, hz, pace ? 1 : 0));
+        } catch (Exception ignored) {
+        }
+        java.util.LinkedHashMap<String, String> set = new java.util.LinkedHashMap<>();
+        set.put("renderDistance", String.valueOf(distance));
+        set.put("simulationDistance", String.valueOf(simulation));
+        set.put("renderClouds", clouds);
+        set.put("particles", particles);
+        set.put("biomeBlendRadius", String.valueOf(biome));
+        set.put("entityDistanceScaling", entities);
+        set.put("mipmapLevels", "4");
+        set.put("textureFiltering", String.valueOf(filtering));
+        set.put("maxAnisotropyBit", String.valueOf(anisotropy));
+        File options = new File(SetupActivity.home(this), "options.txt");
+        java.util.List<String> lines = new java.util.ArrayList<>();
+        try (java.io.BufferedReader r = new java.io.BufferedReader(new java.io.FileReader(options))) {
+            String line;
+            while ((line = r.readLine()) != null) lines.add(line);
+        } catch (Exception ignored) {
+        }
+        for (java.util.Map.Entry<String, String> e : set.entrySet()) {
+            boolean found = false;
+            for (int i = 0; i < lines.size(); i++) {
+                if (lines.get(i).startsWith(e.getKey() + ":")) {
+                    lines.set(i, e.getKey() + ":" + e.getValue());
+                    found = true;
+                }
+            }
+            if (!found) lines.add(e.getKey() + ":" + e.getValue());
+        }
+        try (java.io.FileWriter w = new java.io.FileWriter(options)) {
+            for (String line : lines) w.write(line + "\n");
+        } catch (Exception ignored) {
+        }
     }
 
     private void saveVr(float scale, int hz, boolean pace) {

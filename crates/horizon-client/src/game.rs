@@ -15124,7 +15124,11 @@ impl Game<'_> {
             // VR: both arms show, each on its controller, whatever they hold.
             // A bow goes to the left hand, the right one pulls its string.
             let vr_left = (self.settings.main_hand_left != (hand == Hand::Off)) != vr_bow;
-            let vr_frame = vr_hand_frame(vr_left);
+            // VR: the arm swings as vanilla's does when the trigger attacks or mines, not when
+            // the hand itself strikes (a gesture).
+            let vr_frame = vr_hand_frame(vr_left).map(|frame| {
+                frame * vr_swing(if vr_gesture_active() { 0.0 } else { attacks[i] })
+            });
             if !shown[i] && vr_frame.is_none() {
                 continue;
             }
@@ -15314,7 +15318,7 @@ impl Game<'_> {
             };
             let base = horizon_client::first_person::item_pose(left, inverse_height, attack, pose);
             let mut m = match vr_frame {
-                Some(frame) => frame * vr_held_item(left),
+                Some(frame) => frame * vr_held_item(left, self.vr_item_scale(&stack.item)),
                 None => to_world * base,
             };
             // PvP & HUD's shield size (100% is vanilla's), toward the hand holding it.
@@ -20348,8 +20352,32 @@ fn vr_hand_frame(left: bool) -> Option<glam::Mat4> {
 
 /// How long the player's arm is in VR, as a share of the model's (12 pixels).
 const VR_ARM_SCALE: f32 = 0.45;
-/// The held item's size in VR, as a share of a player model's (a sword about 0.6 m long).
-const VR_ITEM_SCALE: f32 = 0.7;
+/// A held tool's or flat item's size in VR, as a share of a player model's (a sword about
+/// 0.55 m long); a block's, smaller (about 21 cm a side, as the first versions held them).
+const VR_ITEM_SCALE: f32 = 0.65;
+const VR_BLOCK_SCALE: f32 = 0.56;
+
+/// VR: vanilla's swing (`attack`, 0 to 1 over a swing) as a chop of the controller's frame:
+/// the hand turns down about the elbow, 30 cm behind the grip, and back.
+fn vr_swing(attack: f32) -> glam::Mat4 {
+    use glam::{Mat4, Vec3};
+    if attack <= 0.0 {
+        return Mat4::IDENTITY;
+    }
+    let angle = -(attack * std::f32::consts::PI).sin() * 1.0;
+    Mat4::from_translation(Vec3::new(0.0, 0.0, 0.3))
+        * Mat4::from_rotation_x(angle)
+        * Mat4::from_translation(Vec3::new(0.0, 0.0, -0.3))
+}
+
+/// VR: the hand strikes by itself (`android_input`'s blow and swing gestures), so the arm
+/// does not swing as well.
+fn vr_gesture_active() -> bool {
+    #[cfg(target_os = "android")]
+    return android_input::xr_gesture_active();
+    #[cfg(not(target_os = "android"))]
+    false
+}
 
 /// VR: the arm model (`first_person_arm`'s space: Minecraft's Y-down model, in
 /// blocks) straight back from the controller, its hand at the grip.
@@ -20371,12 +20399,12 @@ fn vr_arm_local(left: bool) -> glam::Mat4 {
 /// `scale(-1, -1, 1)` (the model faces -Z and is Y-down); the arm part turned -90° about X points
 /// ahead; its hand (the cube's lower end, 9 pixels down) sits at the grip; then the layer's own
 /// turn and offset. Left and right mirror each other.
-fn vr_held_item(left: bool) -> glam::Mat4 {
+fn vr_held_item(left: bool, scale: f32) -> glam::Mat4 {
     use glam::{Mat4, Vec3};
     use std::f32::consts::{FRAC_PI_2, PI};
     let px = 1.0 / 16.0;
     let side = if left { 1.0 } else { -1.0 };
-    Mat4::from_scale(Vec3::splat(VR_ITEM_SCALE))
+    Mat4::from_scale(Vec3::splat(scale))
         * Mat4::from_scale(Vec3::new(-1.0, -1.0, 1.0))
         * Mat4::from_rotation_x(-FRAC_PI_2)
         * Mat4::from_translation(-Vec3::new(side * px, 9.0 * px, 0.0))
@@ -20384,6 +20412,15 @@ fn vr_held_item(left: bool) -> glam::Mat4 {
         * Mat4::from_rotation_y(PI)
         * Mat4::from_translation(Vec3::new(if left { -px } else { px }, 2.0 * px, -10.0 * px))
 }
+impl Game<'_> {
+    /// VR: how big `item` is held: smaller for an item that is a block.
+    fn vr_item_scale(&self, item: &str) -> f32 {
+        static BLOCKS: std::sync::OnceLock<std::collections::HashSet<String>> = std::sync::OnceLock::new();
+        let blocks = BLOCKS.get_or_init(|| self.res.facts().states.iter().map(|s| s.name.to_string()).collect());
+        if blocks.contains(item) { VR_BLOCK_SCALE } else { VR_ITEM_SCALE }
+    }
+}
+
 /// VR is on (the headset shows the game).
 fn vr_active() -> bool {
     #[cfg(target_os = "android")]
