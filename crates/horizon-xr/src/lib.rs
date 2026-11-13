@@ -269,6 +269,16 @@ struct Session {
     body_yaw: f32,
     /// The yaw `look` last gave the player; `None` until the first look.
     last_yaw: Option<f32>,
+    /// The open menu's panel in the world (camera-relative, `menu_panel`) at the last frame.
+    menu_world: Option<(Quat, Vec3, [f32; 2])>,
+    /// The renderer drew the menu's panel into the eyes this frame (`note_panel_in_eyes`):
+    /// no compositor layer for it then.
+    panel_in_eyes: bool,
+    /// Frame pacing (`Pace`), the last drawn frame's views (shown again between drawn frames)
+    /// and the renderer's queue.
+    pace: Pace,
+    last_views: Vec<xr::View>,
+    queue: Option<wgpu::Queue>,
     stats: Stats,
 }
 
@@ -636,12 +646,76 @@ fn set_performance_levels(instance: &xr::Instance, session: &xr::Session<xr::Vul
     }
 }
 
-/// The display's refresh rate from `HORIZON_XR_HZ` (the launcher's VR settings): the offered
-/// rate nearest to it (the Quest 3 offers 72, 80, 90 and 120 Hz). Unset leaves the default.
+/// Frame pacing: when the game cannot draw a frame within one display period, it draws every
+/// second (or third) one, evenly, and the compositor shows the last again in between, turned
+/// to the head. Uneven frames (one period, then two) were the micro-stutter. The number of
+/// periods per drawn frame follows the GPU's time (`note_gpu_ms`), changing only once a new
+/// count has held for a second and a half. `HORIZON_XR_PACE=off` (the launcher) draws every
+/// frame the runtime asks for.
+struct Pace {
+    on: bool,
+    /// Periods per drawn frame, 1 to 3.
+    every: u32,
+    count: u32,
+    gpu_ms: f32,
+    period_ms: f32,
+    candidate: (u32, Option<std::time::Instant>),
+}
+
+impl Pace {
+    fn new() -> Self {
+        Pace {
+            on: std::env::var("HORIZON_XR_PACE").as_deref() != Ok("off"),
+            every: 1,
+            count: 0,
+            gpu_ms: 0.0,
+            period_ms: 0.0,
+            candidate: (1, None),
+        }
+    }
+
+    /// Whether this display frame shows the last drawn one again.
+    fn repeat_now(&mut self) -> bool {
+        self.count = self.count.wrapping_add(1);
+        self.on && self.every > 1 && self.count % self.every != 0
+    }
+
+    /// After a drawn frame: the periods its GPU time needs, with a tenth to spare.
+    fn choose(&mut self) {
+        if !self.on || self.gpu_ms <= 0.0 || self.period_ms <= 0.0 {
+            return;
+        }
+        let wanted = ((self.gpu_ms * 1.1 / self.period_ms).ceil() as u32).clamp(1, 3);
+        let now = std::time::Instant::now();
+        match self.candidate {
+            (c, Some(since)) if c == wanted => {
+                if wanted != self.every && now.duration_since(since) > Duration::from_millis(1500) {
+                    log::info!(
+                        "Horizon VR: frame pacing every {wanted} period(s) ({:.1} ms GPU, {:.1} ms period)",
+                        self.gpu_ms,
+                        self.period_ms
+                    );
+                    self.every = wanted;
+                    self.count = 0;
+                }
+            }
+            _ => self.candidate = (wanted, Some(now)),
+        }
+    }
+}
+
+/// The GPU's time for both eyes of the last timed frame, in milliseconds (the renderer's pass
+/// timings), for the frame pacing.
+pub fn note_gpu_ms(ms: f32) {
+    if let Some(s) = xr_state().as_mut().and_then(|x| x.session.as_mut()) {
+        s.pace.gpu_ms = ms;
+    }
+}
+
+/// The display's refresh rate from `HORIZON_XR_HZ` (the launcher's VR settings), 72 Hz when
+/// unset: the offered rate nearest to it (the Quest 3 offers 72, 80, 90 and 120 Hz).
 fn set_refresh_rate(instance: &xr::Instance, session: &xr::Session<xr::Vulkan>) {
-    let Some(wanted) = std::env::var("HORIZON_XR_HZ").ok().and_then(|v| v.trim().parse::<f32>().ok()) else {
-        return;
-    };
+    let wanted = std::env::var("HORIZON_XR_HZ").ok().and_then(|v| v.trim().parse::<f32>().ok()).unwrap_or(72.0);
     if instance.exts().fb_display_refresh_rate.is_none() {
         log::info!("Horizon VR: no XR_FB_display_refresh_rate");
         return;
@@ -803,6 +877,11 @@ fn start_session(xr: &Xr, device: &wgpu::Device, raw_device: vk::Device) -> Resu
         anchor: None,
         body_yaw: 0.0,
         last_yaw: None,
+        menu_world: None,
+        panel_in_eyes: false,
+        pace: Pace::new(),
+        last_views: Vec::new(),
+        queue: None,
         stats: Stats::default(),
     })
 }
@@ -814,6 +893,7 @@ fn start_session(xr: &Xr, device: &wgpu::Device, raw_device: vk::Device) -> Resu
 pub fn begin_frame() -> Option<FrameViews> {
     let mut guard = xr_state();
     let xr = guard.as_mut()?;
+    let sharpen = xr.sharpen;
     let s = xr.session.as_mut()?;
     poll_events(&xr.instance, s);
     if !s.running {
@@ -867,6 +947,18 @@ pub fn begin_frame() -> Option<FrameViews> {
         pad.right_click = s.clicks[1].2;
         s.pad = pad;
         s.stats.pad = Some(read.map_err(|e| e.to_string()));
+    }
+    // Frame pacing: between drawn frames the last one goes to the compositor again, which
+    // turns it to where the head is now, so every frame shows as long as the next.
+    s.pace.period_ms = state.predicted_display_period.as_nanos() as f32 / 1e6;
+    if state.should_render && s.pace.repeat_now() && !s.last_views.is_empty() {
+        if let Some(queue) = s.queue.clone() {
+            s.pending = Some((state, s.last_views.clone()));
+            s.eye_drawn = [true; 2];
+            s.stats.draws.entry("repeated").and_modify(|n| *n += 1).or_insert(1);
+            finish_frame(s, sharpen, &queue);
+            return None;
+        }
     }
     let located = state
         .should_render
@@ -991,6 +1083,14 @@ pub fn begin_frame() -> Option<FrameViews> {
         ),
         None => 0.0,
     };
+    s.menu_world = s.menu_open.then_some(s.menu_pose).flatten().map(|panel| {
+        (
+            body * quat(panel.orientation),
+            body * (vec3(panel.position) - head_position + lean),
+            [MENU_WIDTH, MENU_WIDTH * aspect],
+        )
+    });
+    s.panel_in_eyes = false;
     s.pending = Some((state, views));
     s.eye_drawn = [false; 2];
     s.panel_drawn = None;
@@ -1090,6 +1190,19 @@ pub fn set_aim_points(at: [Option<(Vec3, Option<Vec3>)>; 2]) {
 pub fn set_look_hand(left: bool) {
     if let Some(s) = xr_state().as_mut().and_then(|x| x.session.as_mut()) {
         s.look_left = left;
+    }
+}
+
+/// The open menu's panel in the world this frame: its rotation, its middle (camera-relative,
+/// world axes) and its size in metres, for the renderer to draw into the eyes.
+pub fn menu_panel() -> Option<(Quat, Vec3, [f32; 2])> {
+    xr_state().as_ref()?.session.as_ref()?.menu_world
+}
+
+/// The renderer drew the menu's panel into the eyes: no compositor layer for it this frame.
+pub fn note_panel_in_eyes() {
+    if let Some(s) = xr_state().as_mut().and_then(|x| x.session.as_mut()) {
+        s.panel_in_eyes = true;
     }
 }
 
@@ -1218,6 +1331,19 @@ pub fn end_frame(queue: &wgpu::Queue) {
     let Some(s) = guard.as_mut().and_then(|x| x.session.as_mut()) else {
         return;
     };
+    if s.queue.is_none() {
+        s.queue = Some(queue.clone());
+    }
+    if let Some((_, views)) = &s.pending {
+        s.last_views = views.clone();
+    }
+    s.pace.choose();
+    finish_frame(s, sharpen, queue);
+}
+
+/// Hands the pending frame's layers to the compositor (`end_frame`, or a frame shown again
+/// by the frame pacing).
+fn finish_frame(s: &mut Session, sharpen: bool, queue: &wgpu::Queue) {
     let Some((state, views)) = s.pending.take() else {
         return;
     };
@@ -1466,7 +1592,7 @@ pub fn end_frame(queue: &wgpu::Queue) {
         if let Some((head, wrist)) = &wrist_layers {
             layers.push(head);
             layers.push(wrist);
-        } else if s.panel_drawn.is_some() {
+        } else if s.panel_drawn.is_some() && !(s.panel_in_eyes && s.panel_drawn == Some(Panel::Room)) {
             layers.push(&panel);
         }
         for cross in crosses.iter().flatten() {

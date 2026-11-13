@@ -52,6 +52,10 @@ fn android_main(app: AndroidApp) {
     }
     // The launcher's VR settings (ProfileActivity): `scale=` and `hz=` lines in horizon-vr.txt.
     if let Ok(text) = std::fs::read_to_string(home.join("horizon-vr.txt")) {
+        if text.lines().any(|l| l.trim() == "pace=0") && std::env::var_os("HORIZON_XR_PACE").is_none() {
+            // SAFETY: still before the game starts its threads.
+            unsafe { std::env::set_var("HORIZON_XR_PACE", "off") };
+        }
         for (key, var) in [("scale", "HORIZON_XR_SCALE"), ("hz", "HORIZON_XR_HZ")] {
             let value = text
                 .lines()

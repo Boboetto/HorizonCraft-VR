@@ -15179,11 +15179,6 @@ impl Game<'_> {
             // The main hand on its arm, the off hand on the other one (VR: the controller it
             // is drawn on, a bow on the left).
             let left = if vr_frame.is_some() { vr_left } else { self.settings.main_hand_left != (hand == Hand::Off) };
-            // VR: with a menu open the arms go. The menu's panel is laid over the eyes' image,
-            // so an arm before it still showed behind it, and one beside it looked farther.
-            if vr_frame.is_some() && (self.screen != Screen::Playing || self.title.is_some()) {
-                continue;
-            }
             // A Legacy sword held up hides the off hand's shield.
             if hand == Hand::Off && legacy_block {
                 continue;
@@ -17425,7 +17420,8 @@ impl Game<'_> {
         let result = match self.renderer.as_mut() {
             Some(renderer) => {
                 // VR development builds time the passes for the frame report.
-                renderer.set_pass_timing(debug_passes || self.gpu_passes || vr_dev_timing());
+                // VR always times its passes: the headset's frame pacing reads them (`note_gpu_ms`).
+                renderer.set_pass_timing(debug_passes || self.gpu_passes || vr_dev_timing() || vr_active());
                 // `gpu_passes` is a measurement: it takes every sample it can.
                 renderer.set_pass_timing_gap(if self.gpu_passes {
                     Duration::ZERO

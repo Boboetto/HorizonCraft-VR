@@ -175,6 +175,7 @@ mod custom_sky;
 mod displace;
 pub mod lightning;
 mod lod;
+mod xr_panel;
 mod native_material;
 mod native_pack;
 mod native_post;
@@ -1079,6 +1080,8 @@ pub struct Renderer {
     xr_hud_skip: bool,
     /// VR: the HUD's panel image, the frame's size.
     xr_hud: Option<wgpu::Texture>,
+    /// VR: the pass that draws the open menu's panel into the eyes (`xr_panel`).
+    xr_panel: Option<xr_panel::XrPanel>,
     /// Offscreen submissions still on the GPU: at most two frames run ahead.
     in_flight: std::collections::VecDeque<wgpu::SubmissionIndex>,
     /// Splitscreen: the caller waits for the GPU once every player has submitted
@@ -4759,6 +4762,7 @@ impl Renderer {
             xr_snapshot: None,
             xr_hud_skip: false,
             xr_hud: None,
+            xr_panel: None,
             in_flight: std::collections::VecDeque::new(),
             paced_elsewhere: false,
             first_frame: if previous.is_none() {
@@ -7551,6 +7555,11 @@ impl Renderer {
                 },
             )
         });
+        // Both eyes' GPU time, for the headset's frame pacing.
+        let eye_ms: f32 = self.own_pass_times().iter().map(|(_, ms)| ms).sum();
+        if eye_ms > 0.0 {
+            horizon_xr::note_gpu_ms(eye_ms * 2.0);
+        }
         horizon_xr::end_frame(&self.queue);
         drawn
     }
@@ -11548,6 +11557,27 @@ impl Renderer {
         };
         if let Some(hdr) = &self.hdr {
             hdr.keep_world(encoder, timing.as_mut());
+        }
+        // VR: the open menu's panel in the world, before the arms, which then pass in front.
+        #[cfg(target_os = "android")]
+        if let (Some(views), Some(panel)) = (self.xr_view, horizon_xr::menu_panel())
+            && self.xr_hud.is_some()
+        {
+            if self.xr_panel.as_ref().is_none_or(|p| p.format() != self.frame_format) {
+                self.xr_panel = Some(xr_panel::XrPanel::new(&self.device, self.frame_format));
+            }
+            if let (Some(pass), Some(image)) = (&self.xr_panel, &self.xr_hud) {
+                pass.draw(
+                    &self.device,
+                    &self.queue,
+                    encoder,
+                    view_target,
+                    image,
+                    views.primary().view_proj(Mat4::IDENTITY),
+                    panel,
+                );
+                horizon_xr::note_panel_in_eyes();
+            }
         }
         if overlay.hand_quads > 0 {
             let attachments = [Some(wgpu::RenderPassColorAttachment {

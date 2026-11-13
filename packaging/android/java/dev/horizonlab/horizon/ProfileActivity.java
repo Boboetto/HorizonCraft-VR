@@ -184,12 +184,15 @@ public class ProfileActivity extends Activity implements View.OnClickListener {
         final int[] rates = {72, 80, 90, 120};
         final Button scaleButton = Ui.button(this, "", false);
         final Button rateButton = Ui.button(this, "", false);
+        final Button paceButton = Ui.button(this, "", false);
+        final boolean[] pace = {vrSetting("pace", 1) != 0};
         final float[] scale = {vrSetting("scale", 0.8f)};
         final int[] rate = {(int) vrSetting("hz", 72)};
         final Runnable showVr = new Runnable() {
             public void run() {
                 scaleButton.setText(Ui.t("Разрешение: ", "Resolution: ") + String.format(java.util.Locale.ROOT, "%.1fx", scale[0]));
                 rateButton.setText(Ui.t("Частота: ", "Refresh rate: ") + rate[0] + " Hz");
+                paceButton.setText(Ui.t("Ровные кадры: ", "Frame pacing: ") + (pace[0] ? "Auto" : "Off"));
             }
         };
         showVr.run();
@@ -198,7 +201,7 @@ public class ProfileActivity extends Activity implements View.OnClickListener {
                 int next = 0;
                 for (int i = 0; i < scales.length; i++) if (Math.abs(scales[i] - scale[0]) < 0.01f) next = (i + 1) % scales.length;
                 scale[0] = scales[next];
-                saveVr(scale[0], rate[0]);
+                saveVr(scale[0], rate[0], pace[0]);
                 showVr.run();
             }
         });
@@ -207,7 +210,14 @@ public class ProfileActivity extends Activity implements View.OnClickListener {
                 int next = 0;
                 for (int i = 0; i < rates.length; i++) if (rates[i] == rate[0]) next = (i + 1) % rates.length;
                 rate[0] = rates[next];
-                saveVr(scale[0], rate[0]);
+                saveVr(scale[0], rate[0], pace[0]);
+                showVr.run();
+            }
+        });
+        paceButton.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                pace[0] = !pace[0];
+                saveVr(scale[0], rate[0], pace[0]);
                 showVr.run();
             }
         });
@@ -218,6 +228,11 @@ public class ProfileActivity extends Activity implements View.OnClickListener {
         vl.leftMargin = Ui.dp(this, 8);
         vrRow.addView(rateButton, vl);
         card.addView(vrRow, Ui.gap(this, 6));
+        card.addView(paceButton, Ui.gap(this, 6));
+        card.addView(Ui.text(this, Ui.t(
+                "Ровные кадры: если игра не успевает, она рисует каждый второй кадр ровно, без рывков.",
+                "Frame pacing: when the game cannot keep up, it draws every second frame evenly instead of unevenly, without micro-stutter."),
+                12, Ui.MUTED, false));
 
         Ui.section(card, Ui.t("Аккаунт Microsoft", "Microsoft account"));
         accountStatus = Ui.text(this, accountLine(), 15, Ui.TEXT, true);
@@ -391,9 +406,9 @@ public class ProfileActivity extends Activity implements View.OnClickListener {
         return fallback;
     }
 
-    private void saveVr(float scale, int hz) {
+    private void saveVr(float scale, int hz, boolean pace) {
         try (java.io.FileWriter w = new java.io.FileWriter(vrFile())) {
-            w.write(String.format(java.util.Locale.ROOT, "scale=%.1f\nhz=%d\n", scale, hz));
+            w.write(String.format(java.util.Locale.ROOT, "scale=%.1f\nhz=%d\npace=%d\n", scale, hz, pace ? 1 : 0));
         } catch (Exception ignored) {
         }
     }
