@@ -6694,6 +6694,10 @@ impl Renderer {
     pub fn set_world_post(&mut self, scale: f32, antialias: bool, taa: bool, upscale: f32) {
         let taa = taa && self.world_post.supports_taa();
         self.world_post.scale = scale.clamp(0.25, 2.0);
+        // VR: FXAA always, over each eye: the edges of far blocks (snow layers, steps) are
+        // thinner than a pixel and shimmer as the head moves.
+        #[cfg(target_os = "android")]
+        let antialias = antialias || horizon_xr::active();
         self.world_post.antialias = antialias && !taa;
         self.world_post.taa = taa;
         self.world_post.upscale = if taa { upscale.clamp(1.0, 4.0) } else { 1.0 };

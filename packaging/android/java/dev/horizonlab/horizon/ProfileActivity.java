@@ -121,8 +121,7 @@ public class ProfileActivity extends Activity implements View.OnClickListener {
         left.addView(who, new LinearLayout.LayoutParams(-1, 0, 1));
 
         message = Ui.text(this, "", 12, Ui.WARN, false);
-        message.setMaxLines(3);
-        left.addView(message, Ui.gap(this, 4));
+        message.setMaxLines(2);
         play = Ui.button(this, Ui.t("ИГРАТЬ В VR", "PLAY VR"), true);
         play.setTextSize(22);
         play.setLetterSpacing(0.1f);
@@ -130,21 +129,10 @@ public class ProfileActivity extends Activity implements View.OnClickListener {
         play.setOnClickListener(this);
         play.setTextColor(Color.BLACK);
         play.setShadowLayer(0, 0, 0, 0);
-        left.addView(play, Ui.gap(this, 6));
 
-        // Right: settings.
-        ScrollView scroll = new ScrollView(this);
-        scroll.setBackground(Ui.rounded(this, PANEL, Ui.EDGE, 16));
-        scroll.setVerticalScrollBarEnabled(false);
-        LinearLayout card = new LinearLayout(this);
-        card.setOrientation(LinearLayout.VERTICAL);
-        card.setPadding(Ui.dp(this, 16), Ui.dp(this, 4), Ui.dp(this, 16), Ui.dp(this, 16));
-        scroll.addView(card);
-        // Settings on the left (sign-in first), the player and Play on the right.
-        root.addView(scroll, new LinearLayout.LayoutParams(0, -1, 1.15f));
-        LinearLayout.LayoutParams rightLp = new LinearLayout.LayoutParams(0, -1, 1);
-        rightLp.leftMargin = Ui.dp(this, 14);
-        root.addView(left, rightLp);
+        // The menu's pages: each section its own scrolling page.
+        LinearLayout accountBox = page(), updatesBox = page(), settingsBox = page(), modsBox = page();
+        LinearLayout card = accountBox;
 
         Ui.section(card, Ui.t("Аккаунт Microsoft", "Microsoft account"));
         accountStatus = Ui.text(this, accountLine(), 15, Ui.TEXT, true);
@@ -210,6 +198,7 @@ public class ProfileActivity extends Activity implements View.OnClickListener {
         card.addView(advancedBox, Ui.gap(this, 6));
 
         // Horizon VR's own settings and updates.
+        card = updatesBox;
         Ui.section(card, Ui.t("Обновления", "Updates"));
         final TextView updateStatus = Ui.text(this, "HorizonCraft VR v" + Updater.installed(this)
                 + Ui.t(" · проверка…", " · checking…"), 14, Ui.TEXT, true);
@@ -241,6 +230,7 @@ public class ProfileActivity extends Activity implements View.OnClickListener {
             }
         });
 
+        card = settingsBox;
         Ui.section(card, Ui.t("Настройки VR", "VR settings"));
         card.addView(Ui.text(this, Ui.t(
                 "Резкая картинка и столько чанков, сколько игра рисует плавно.",
@@ -273,6 +263,7 @@ public class ProfileActivity extends Activity implements View.OnClickListener {
 
         // Horizon VR: no Vulkan driver choice (the headset's runtime always uses the system's)
         // and no screen cutout setting (the headset has no cutout).
+        card = modsBox;
         Ui.section(card, Ui.t("Моды", "Mods"));
         card.addView(Ui.text(this, Ui.t(
                 ".hnmod со сборкой для Android или .hmod. Или положите файл в Android/data/dev.horizonlab.horizon/files/mods/.",
@@ -282,6 +273,91 @@ public class ProfileActivity extends Activity implements View.OnClickListener {
         mods.setOnClickListener(this);
         card.addView(mods, Ui.gap(this, 8));
 
+        // A launcher's classic layout: a menu down the left that folds to its icons, and the
+        // pages beside it. The home page is the night-sky picture with Play in a bar below.
+        root.setPadding(0, 0, 0, 0);
+        root.setBackgroundColor(Ui.BG);
+        final FrameLayout content = new FrameLayout(this);
+        LinearLayout home = new LinearLayout(this);
+        home.setOrientation(LinearLayout.VERTICAL);
+        FrameLayout hero = new FrameLayout(this);
+        hero.setBackground(Ui.sunset(this));
+        TextView brand = Ui.text(this, "HORIZONCRAFT VR", 34, Ui.TEXT, true);
+        brand.setLetterSpacing(0.1f);
+        brand.setGravity(Gravity.CENTER);
+        hero.addView(brand, new FrameLayout.LayoutParams(-1, -2, Gravity.CENTER_HORIZONTAL | Gravity.TOP));
+        ((FrameLayout.LayoutParams) brand.getLayoutParams()).topMargin = Ui.dp(this, 40);
+        home.addView(hero, new LinearLayout.LayoutParams(-1, 0, 1));
+        LinearLayout bar = new LinearLayout(this);
+        bar.setOrientation(LinearLayout.HORIZONTAL);
+        bar.setGravity(Gravity.CENTER_VERTICAL);
+        bar.setBackground(Ui.rounded(this, Color.rgb(16, 16, 18), Ui.EDGE, 0));
+        bar.setPadding(Ui.dp(this, 20), Ui.dp(this, 10), Ui.dp(this, 20), Ui.dp(this, 10));
+        LinearLayout info = new LinearLayout(this);
+        info.setOrientation(LinearLayout.VERTICAL);
+        info.addView(Ui.text(this, "HorizonCraft VR " + version(), 14, Ui.TEXT, true));
+        info.addView(message);
+        bar.addView(info, new LinearLayout.LayoutParams(0, -2, 1));
+        bar.addView(play, new LinearLayout.LayoutParams(Ui.dp(this, 260), Ui.dp(this, 64)));
+        home.addView(bar, new LinearLayout.LayoutParams(-1, -2));
+        left.setPadding(Ui.dp(this, 24), Ui.dp(this, 24), Ui.dp(this, 24), Ui.dp(this, 24));
+        left.setBackground(null);
+        final View[] pages = {home, left, wrap(settingsBox), wrap(accountBox), wrap(updatesBox), wrap(modsBox)};
+        final String[][] items = {
+            {"\u2302", Ui.t("Главная", "Home")},
+            {"\u263A", Ui.t("Профиль", "Profile")},
+            {"\u2699", Ui.t("Настройки", "Settings")},
+            {"\u2709", Ui.t("Аккаунт", "Account")},
+            {"\u21BB", Ui.t("Обновления", "Updates")},
+            {"\u2726", Ui.t("Моды", "Mods")},
+        };
+        for (View page : pages) content.addView(page, new FrameLayout.LayoutParams(-1, -1));
+        final LinearLayout menu = new LinearLayout(this);
+        menu.setOrientation(LinearLayout.VERTICAL);
+        menu.setBackground(Ui.rounded(this, Color.rgb(12, 12, 14), Ui.EDGE, 0));
+        menu.setPadding(Ui.dp(this, 6), Ui.dp(this, 6), Ui.dp(this, 6), Ui.dp(this, 6));
+        final Button fold = Ui.button(this, "\u2630", false);
+        menu.addView(fold, new LinearLayout.LayoutParams(-1, Ui.dp(this, 52)));
+        final Button[] entries = new Button[items.length];
+        final boolean[] open = {false};
+        final int[] shown = {0};
+        final Runnable refresh = new Runnable() {
+            public void run() {
+                for (int i = 0; i < pages.length; i++) {
+                    pages[i].setVisibility(i == shown[0] ? View.VISIBLE : View.GONE);
+                    entries[i].setText(open[0] ? items[i][0] + "   " + items[i][1] : items[i][0]);
+                    entries[i].setGravity(open[0] ? Gravity.CENTER_VERTICAL | Gravity.START : Gravity.CENTER);
+                    entries[i].setTextColor(i == shown[0] ? Color.BLACK : Color.WHITE);
+                    entries[i].setBackground(i == shown[0]
+                            ? new Ui.Bevel(Ui.dp(ProfileActivity.this, 2), Color.WHITE, Ui.EDGE, false)
+                            : new Ui.Bevel(Ui.dp(ProfileActivity.this, 2), Ui.STONE, Ui.EDGE, false));
+                }
+                menu.getLayoutParams().width = Ui.dp(ProfileActivity.this, open[0] ? 210 : 68);
+                menu.requestLayout();
+            }
+        };
+        for (int i = 0; i < items.length; i++) {
+            final int index = i;
+            entries[i] = Ui.button(this, items[i][0], false);
+            entries[i].setTextSize(18);
+            entries[i].setOnClickListener(new View.OnClickListener() {
+                public void onClick(View v) {
+                    shown[0] = index;
+                    refresh.run();
+                }
+            });
+            menu.addView(entries[i], new LinearLayout.LayoutParams(-1, Ui.dp(this, 52)));
+            ((LinearLayout.LayoutParams) entries[i].getLayoutParams()).topMargin = Ui.dp(this, 6);
+        }
+        fold.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                open[0] = !open[0];
+                refresh.run();
+            }
+        });
+        root.addView(menu, new LinearLayout.LayoutParams(Ui.dp(this, 68), -1));
+        root.addView(content, new LinearLayout.LayoutParams(0, -1, 1));
+        refresh.run();
         setContentView(root);
         hideBars();
         refreshAccount();
@@ -303,6 +379,21 @@ public class ProfileActivity extends Activity implements View.OnClickListener {
                 c.setSystemBarsBehavior(android.view.WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
             }
         }
+    }
+
+    /** A page of the menu: a padded column, scrolled by `wrap`. */
+    private LinearLayout page() {
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(Ui.dp(this, 24), Ui.dp(this, 8), Ui.dp(this, 24), Ui.dp(this, 24));
+        return box;
+    }
+
+    private View wrap(LinearLayout box) {
+        ScrollView scroll = new ScrollView(this);
+        scroll.setVerticalScrollBarEnabled(false);
+        scroll.addView(box);
+        return scroll;
     }
 
     /** horizon-vr.txt in the game folder: the VR settings the game reads at start (android_main). */
