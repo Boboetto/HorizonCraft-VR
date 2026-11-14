@@ -13,13 +13,13 @@ import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.IOException;
 
-/** Shows the game folder (getExternalFilesDir) as a "Horizon" root in the system Files app. */
+/** Shows the game folder (getExternalFilesDir) as a "HorizonCraft VR" root in the system Files app. */
 public class HorizonDocumentsProvider extends DocumentsProvider {
     private static final String ROOT_ID = "horizon";
     private static final String PREFIX = "root:";
 
     private static final String[] DEFAULT_ROOT_PROJECTION = {
-        Root.COLUMN_ROOT_ID, Root.COLUMN_FLAGS, Root.COLUMN_TITLE, Root.COLUMN_ICON,
+        Root.COLUMN_ROOT_ID, Root.COLUMN_FLAGS, Root.COLUMN_TITLE, Root.COLUMN_SUMMARY, Root.COLUMN_ICON,
         Root.COLUMN_DOCUMENT_ID, Root.COLUMN_AVAILABLE_BYTES,
     };
     private static final String[] DEFAULT_DOCUMENT_PROJECTION = {
@@ -99,7 +99,7 @@ public class HorizonDocumentsProvider extends DocumentsProvider {
         MatrixCursor.RowBuilder row = c.newRow();
         row.add(Document.COLUMN_DOCUMENT_ID, docId);
         row.add(Document.COLUMN_MIME_TYPE, mimeFor(f));
-        row.add(Document.COLUMN_DISPLAY_NAME, isRoot ? "Horizon" : f.getName());
+        row.add(Document.COLUMN_DISPLAY_NAME, isRoot ? "HorizonCraft VR" : f.getName());
         row.add(Document.COLUMN_LAST_MODIFIED, f.lastModified());
         row.add(Document.COLUMN_FLAGS, flags);
         row.add(Document.COLUMN_SIZE, f.isDirectory() ? null : f.length());
@@ -112,7 +112,9 @@ public class HorizonDocumentsProvider extends DocumentsProvider {
         MatrixCursor.RowBuilder row = c.newRow();
         row.add(Root.COLUMN_ROOT_ID, ROOT_ID);
         row.add(Root.COLUMN_FLAGS, Root.FLAG_SUPPORTS_CREATE | Root.FLAG_SUPPORTS_IS_CHILD | Root.FLAG_LOCAL_ONLY);
-        row.add(Root.COLUMN_TITLE, "Horizon");
+        // The game's folder, not a drive: worlds, resource packs, mods, screenshots.
+        row.add(Root.COLUMN_TITLE, "HorizonCraft VR");
+        row.add(Root.COLUMN_SUMMARY, Ui.t("Папка игры", "Game folder"));
         row.add(Root.COLUMN_ICON, getContext().getApplicationInfo().icon);
         row.add(Root.COLUMN_DOCUMENT_ID, PREFIX);
         row.add(Root.COLUMN_AVAILABLE_BYTES, base.getUsableSpace());
