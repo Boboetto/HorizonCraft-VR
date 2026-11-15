@@ -278,6 +278,11 @@ struct Session {
     /// and the renderer's queue.
     pace: Pace,
     last_views: Vec<xr::View>,
+    /// The last drawn frame's body yaw (degrees), display time (ns) and head position, and
+    /// the body's turn rate (degrees a second) between the last two drawn frames: a frame
+    /// shown again turns by the stick's turn since (`turned_views`).
+    drawn: Option<(f32, i64, Vec3)>,
+    yaw_rate: f32,
     queue: Option<wgpu::Queue>,
     stats: Stats,
 }
@@ -881,6 +886,8 @@ fn start_session(xr: &Xr, device: &wgpu::Device, raw_device: vk::Device) -> Resu
         panel_in_eyes: false,
         pace: Pace::new(),
         last_views: Vec::new(),
+        drawn: None,
+        yaw_rate: 0.0,
         queue: None,
         stats: Stats::default(),
     })
@@ -953,7 +960,8 @@ pub fn begin_frame() -> Option<FrameViews> {
     s.pace.period_ms = state.predicted_display_period.as_nanos() as f32 / 1e6;
     if state.should_render && s.pace.repeat_now() && !s.last_views.is_empty() {
         if let Some(queue) = s.queue.clone() {
-            s.pending = Some((state, s.last_views.clone()));
+            let views = turned_views(s, state.predicted_display_time.as_nanos());
+            s.pending = Some((state, views));
             s.eye_drawn = [true; 2];
             s.stats.draws.entry("repeated").and_modify(|n| *n += 1).or_insert(1);
             finish_frame(s, sharpen, &queue);
@@ -988,6 +996,15 @@ pub fn begin_frame() -> Option<FrameViews> {
     // Leaning moves the view, up to MAX_LEAN from where the head started.
     let lean = (head_position - anchor).clamp_length_max(MAX_LEAN);
     let body = body_rotation(s.body_yaw);
+    let now = state.predicted_display_time.as_nanos();
+    if let Some((yaw, at, _)) = s.drawn
+        && now > at
+    {
+        let rate = (s.body_yaw - yaw) / ((now - at) as f32 / 1e9);
+        // A turn the game made at once (toward a mob, the server) is no stick's steady turn.
+        s.yaw_rate = if rate.abs() < 400.0 { rate } else { 0.0 };
+    }
+    s.drawn = Some((s.body_yaw, now, head_position));
     let eyes = [0, 1].map(|i| {
         let v = &views[i];
         Eye {
@@ -1699,6 +1716,31 @@ pub fn look(yaw: f32) -> Option<(f32, f32)> {
     let new_yaw = yaw + wrap_degrees(new_yaw - yaw);
     s.last_yaw = Some(new_yaw);
     Some((new_yaw, new_pitch))
+}
+
+/// The last drawn frame's views for a frame shown again at `at` (ns): while the right stick
+/// turns the body, they turn by its turn since that frame, about the head, so the compositor
+/// turns the image with it. Without this the stick's turn went on at the drawn frames' rate
+/// only (every second display frame with the frame pacing), a judder that walking straight
+/// does not have.
+fn turned_views(s: &Session, at: i64) -> Vec<xr::View> {
+    let mut views = s.last_views.clone();
+    let Some((_, drawn_at, head)) = s.drawn else {
+        return views;
+    };
+    if s.pad.right[0].abs() < 0.05 || s.menu_open || at <= drawn_at {
+        return views;
+    }
+    let turn = (s.yaw_rate * (at - drawn_at) as f32 / 1e9).clamp(-20.0, 20.0);
+    // The image shows the world turned by the body at the drawn frame; with the body turned
+    // by `turn` since, the same image is what LOCAL pose Ry(turn) * view sees.
+    let r = Quat::from_rotation_y(turn.to_radians());
+    for v in &mut views {
+        let rotation = r * quat(v.pose.orientation);
+        let position = head + r * (vec3(v.pose.position) - head);
+        v.pose = pose(rotation, position);
+    }
+    views
 }
 
 /// LOCAL space to world for a body facing `yaw` (Minecraft degrees).
