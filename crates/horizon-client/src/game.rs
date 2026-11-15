@@ -3704,6 +3704,61 @@ impl Game<'_> {
             (0.0, 0.0)
         }
     }
+    /// VR: whether `p` (world) is inside a block's collision shape: hands and held items stop
+    /// at solid blocks, not at grass, flowers or water.
+    fn vr_solid_at(&self, p: [f64; 3]) -> bool {
+        let block = p.map(|v| v.floor() as i32);
+        let state = self.world.block(block[0], block[1], block[2]);
+        if self.res.facts().is_air(state) {
+            return false;
+        }
+        let local = horizon_core::geometry::Vec3 {
+            x: p[0] - f64::from(block[0]),
+            y: p[1] - f64::from(block[1]),
+            z: p[2] - f64::from(block[2]),
+        };
+        self.block_collision_shape(block).boxes().iter().any(|b| b.contains(local))
+    }
+    /// VR: a hand's frame (camera-relative, as `vr_hand_frame`) kept out of solid blocks: the
+    /// hand stops where the way from the eyes to it meets one, and a held item `reach` metres
+    /// long (along the controller) pulls the hand back by as much as its tip would go in.
+    fn vr_hand_blocked(&self, frame: glam::Mat4, reach: f32) -> glam::Mat4 {
+        let Some(eye) = self.eye_position() else {
+            return frame;
+        };
+        let world = |v: glam::Vec3| [0, 1, 2].map(|i| eye[i] + f64::from(v[i]));
+        let at = frame.w_axis.truncate();
+        let step = 0.03f32;
+        let n = (at.length() / step).ceil().max(1.0) as u32;
+        let mut hand = at;
+        for k in 1..=n {
+            if self.vr_solid_at(world(at * (k as f32 / n as f32))) {
+                hand = at * ((k - 1) as f32 / n as f32);
+                break;
+            }
+        }
+        let along = frame.transform_vector3(glam::Vec3::NEG_Z).normalize_or_zero();
+        if reach > 0.0 && along != glam::Vec3::ZERO {
+            let m = (reach / step).ceil().max(1.0) as u32;
+            for k in 1..=m {
+                let d = reach * k as f32 / m as f32;
+                if self.vr_solid_at(world(hand + along * d)) {
+                    hand -= along * (reach - (d - reach / m as f32));
+                    break;
+                }
+            }
+        }
+        glam::Mat4::from_translation(hand - at) * frame
+    }
+    /// VR: how far a held stack reaches past the hand (metres): a tool or weapon its blade,
+    /// anything else a little.
+    fn vr_item_reach(stack: Option<&horizon_client::items::ItemStack>) -> f32 {
+        match stack.map(|s| &*s.item) {
+            None => 0.05,
+            Some(name) if vr_is_tool(name) => 0.45,
+            Some(_) => 0.15,
+        }
+    }
     fn eye_position(&self) -> Option<[f64; 3]> {
         let p = self.player.as_ref()?;
         Some([
@@ -15126,8 +15181,10 @@ impl Game<'_> {
             let vr_left = (self.settings.main_hand_left != (hand == Hand::Off)) != vr_bow;
             // VR: the arm swings as vanilla's does when the trigger attacks or mines, not when
             // the hand itself strikes (a gesture).
+            let reach = Self::vr_item_reach(item.as_ref());
             let vr_frame = vr_hand_frame(vr_left).map(|frame| {
-                frame * vr_swing(if vr_gesture_active() { 0.0 } else { attacks[i] })
+                self.vr_hand_blocked(frame, reach)
+                    * vr_swing(if vr_gesture_active() { 0.0 } else { attacks[i] })
             });
             if !shown[i] && vr_frame.is_none() {
                 continue;
@@ -20348,6 +20405,12 @@ fn vr_hand_frame(left: bool) -> Option<glam::Mat4> {
         let _ = left;
         None
     }
+}
+
+/// VR: a held item with a blade or head that strikes: swords, tools, the trident and mace.
+fn vr_is_tool(name: &str) -> bool {
+    ["_sword", "_pickaxe", "_axe", "_shovel", "_hoe", "_spear"].iter().any(|t| name.ends_with(t))
+        || matches!(name, "minecraft:trident" | "minecraft:mace")
 }
 
 /// How long the player's arm is in VR, as a share of the model's (12 pixels).

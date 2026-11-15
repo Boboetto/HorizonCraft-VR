@@ -242,26 +242,33 @@ public class ProfileActivity extends Activity implements View.OnClickListener {
         msaaOn = vrSetting("msaa", 1) != 0;
         // One mode, Quality: a sharp image with the chunks it can draw smoothly. Applied once
         // (the game's options can still be changed in the game afterwards).
-        if (!"quality".equals(vrMode()) || vrSetting("scale", 0) < 1.35f) applyMode("quality", pace[0]);
+        // With MSAA the edges are smooth at 1.0x: 1.4x on top of it was four times the samples
+        // of 1.0x, and the game fell to a third of 90 Hz.
+        if (!"quality".equals(vrMode()) || Math.abs(vrSetting("scale", 0) - qualityScale()) > 0.05f) {
+            applyMode("quality", pace[0]);
+        }
+        final TextView summary = Ui.text(this, "", 13, Ui.TEXT, true);
         final Runnable showVr = new Runnable() {
             public void run() {
                 paceButton.setText(Ui.t("Ровные кадры: ", "Frame pacing: ") + (pace[0] ? "Auto" : "Off"));
                 msaaButton.setText("Antialiasing MSAA: " + (msaaOn ? "4x" : "Off"));
+                summary.setText(String.format(java.util.Locale.ROOT,
+                        "Quality · %.1fx · 90 Hz · 6 chunks · anisotropic 8x%s", qualityScale(), msaaOn ? " · MSAA 4x" : ""));
             }
         };
         showVr.run();
         paceButton.setOnClickListener(new View.OnClickListener() {
             public void onClick(View v) {
                 pace[0] = !pace[0];
-                saveVr(1.4f, 90, pace[0]);
+                saveVr(qualityScale(), 90, pace[0]);
                 showVr.run();
             }
         });
-        card.addView(Ui.text(this, "Quality · 1.4x · 90 Hz · 6 chunks · anisotropic 8x", 13, Ui.TEXT, true));
+        card.addView(summary);
         msaaButton.setOnClickListener(new View.OnClickListener() {
             public void onClick(View v) {
                 msaaOn = !msaaOn;
-                saveVr(1.4f, 90, pace[0]);
+                saveVr(qualityScale(), 90, pace[0]);
                 showVr.run();
             }
         });
@@ -320,7 +327,8 @@ public class ProfileActivity extends Activity implements View.OnClickListener {
         final View[] pages = {home, left, wrap(settingsBox), wrap(accountBox), wrap(updatesBox), wrap(modsBox)};
         final String[][] items = {
             {"\u2302", Ui.t("Главная", "Home")},
-            {"\u263A", Ui.t("Профиль", "Profile")},
+            // Skins: a coat hanger (drawn, `hanger`; no character has one).
+            {"\uFFFC", Ui.t("Скин", "Skin")},
             {"\u2699", Ui.t("Настройки", "Settings")},
             {"\u2709", Ui.t("Аккаунт", "Account")},
             {"\u21BB", Ui.t("Обновления", "Updates")},
@@ -340,7 +348,15 @@ public class ProfileActivity extends Activity implements View.OnClickListener {
             public void run() {
                 for (int i = 0; i < pages.length; i++) {
                     pages[i].setVisibility(i == shown[0] ? View.VISIBLE : View.GONE);
-                    entries[i].setText(open[0] ? items[i][0] + "   " + items[i][1] : items[i][0]);
+                    String label = open[0] ? items[i][0] + "   " + items[i][1] : items[i][0];
+                    if (i == 1) {
+                        android.text.SpannableString text = new android.text.SpannableString(label);
+                        text.setSpan(new android.text.style.ImageSpan(hanger(i == shown[0] ? Color.BLACK : Color.WHITE),
+                                android.text.style.DynamicDrawableSpan.ALIGN_BASELINE), 0, 1, 0);
+                        entries[i].setText(text);
+                    } else {
+                        entries[i].setText(label);
+                    }
                     entries[i].setGravity(open[0] ? Gravity.CENTER_VERTICAL | Gravity.START : Gravity.CENTER);
                     entries[i].setTextColor(i == shown[0] ? Color.BLACK : Color.WHITE);
                     entries[i].setBackground(i == shown[0]
@@ -411,6 +427,40 @@ public class ProfileActivity extends Activity implements View.OnClickListener {
         return scroll;
     }
 
+    /** A coat hanger in `color`, the size of the menu's 18sp glyphs: the skin section's icon. */
+    private android.graphics.drawable.Drawable hanger(final int color) {
+        final int size = Ui.dp(this, 22);
+        android.graphics.drawable.Drawable d = new android.graphics.drawable.Drawable() {
+            public void draw(android.graphics.Canvas c) {
+                android.graphics.Paint p = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
+                p.setColor(color);
+                p.setStyle(android.graphics.Paint.Style.STROKE);
+                p.setStrokeCap(android.graphics.Paint.Cap.ROUND);
+                p.setStrokeJoin(android.graphics.Paint.Join.ROUND);
+                float u = size / 24f;
+                p.setStrokeWidth(2.2f * u);
+                android.graphics.Path path = new android.graphics.Path();
+                // The hook: from the neck up round to its tip.
+                path.moveTo(12 * u, 10 * u);
+                path.lineTo(12 * u, 8.5f * u);
+                path.arcTo(new android.graphics.RectF(9.5f * u, 3 * u, 14.5f * u, 8 * u), 90, -270);
+                // The shoulders and the bar.
+                path.moveTo(12 * u, 10 * u);
+                path.lineTo(2 * u, 18 * u);
+                path.lineTo(22 * u, 18 * u);
+                path.close();
+                c.drawPath(path, p);
+            }
+            public void setAlpha(int alpha) {}
+            public void setColorFilter(android.graphics.ColorFilter filter) {}
+            public int getOpacity() {
+                return android.graphics.PixelFormat.TRANSLUCENT;
+            }
+        };
+        d.setBounds(0, 0, size, size);
+        return d;
+    }
+
     /** horizon-vr.txt in the game folder: the VR settings the game reads at start (android_main). */
     private File vrFile() {
         return new File(SetupActivity.home(this), "horizon-vr.txt");
@@ -456,7 +506,7 @@ public class ProfileActivity extends Activity implements View.OnClickListener {
         if (mode.equals("performance")) {
             scale = 0.8f; hz = 72; distance = 12; simulation = 8; clouds = "\"false\""; particles = "1"; biome = 1; entities = "1.0";
         } else if (mode.equals("quality")) {
-            scale = 1.4f; hz = 90; distance = 6; simulation = 6; clouds = "\"true\""; particles = "0"; biome = 3; entities = "1.0";
+            scale = qualityScale(); hz = 90; distance = 6; simulation = 6; clouds = "\"true\""; particles = "0"; biome = 3; entities = "1.0";
         } else {
             scale = 1.0f; hz = 72; distance = 9; simulation = 8; clouds = "\"fast\""; particles = "0"; biome = 2; entities = "1.0";
         }
@@ -499,6 +549,11 @@ public class ProfileActivity extends Activity implements View.OnClickListener {
 
     /** VR's MSAA (horizon-vr.txt `msaa=`), on by default. */
     private boolean msaaOn = true;
+
+    /** Quality's resolution: 1.0x with MSAA, 1.4x without. */
+    private float qualityScale() {
+        return msaaOn ? 1.0f : 1.4f;
+    }
 
     private void saveVr(float scale, int hz, boolean pace) {
         try (java.io.FileWriter w = new java.io.FileWriter(vrFile())) {

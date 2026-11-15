@@ -258,6 +258,8 @@ struct Session {
     aim_points: [Option<(Vec3, Option<Vec3>)>; 2],
     /// The player looks along the left controller (its trigger uses), not the right.
     look_left: bool,
+    /// The player looks where the head does, not along a hand (`set_look_head`).
+    look_head: bool,
     /// The player's yaw to add to the left stick so it walks where the head faces.
     move_turn: f32,
     /// The body's turn and the head's lean at the last frame, to put world points back
@@ -881,6 +883,7 @@ fn start_session(xr: &Xr, device: &wgpu::Device, raw_device: vk::Device) -> Resu
         last_lean: Vec3::ZERO,
         anchor: None,
         body_yaw: 0.0,
+        look_head: false,
         last_yaw: None,
         menu_world: None,
         panel_in_eyes: false,
@@ -1205,6 +1208,14 @@ pub fn set_aim_points(at: [Option<(Vec3, Option<Vec3>)>; 2]) {
 
 /// The player looks along the left controller (`true`, while its trigger uses) or the
 /// right one (`look`).
+/// While swimming (and eating in water) the player looks where the head does: swimming
+/// goes where the player looks, and a hand held at the mouth points down.
+pub fn set_look_head(head: bool) {
+    if let Some(s) = xr_state().as_mut().and_then(|x| x.session.as_mut()) {
+        s.look_head = head;
+    }
+}
+
 pub fn set_look_hand(left: bool) {
     if let Some(s) = xr_state().as_mut().and_then(|x| x.session.as_mut()) {
         s.look_left = left;
@@ -1702,7 +1713,10 @@ pub fn look(yaw: f32) -> Option<(f32, f32)> {
     // The player looks where the right controller points (blocks are aimed at with it),
     // where the head does while it is not tracked.
     let aim = if s.look_left { Hand::LeftAim } else { Hand::RightAim };
-    let head = s.hands[aim as usize].map_or(s.head?.0, |(rotation, _)| rotation);
+    let head = match s.hands[aim as usize] {
+        Some((rotation, _)) if !s.look_head => rotation,
+        _ => s.head?.0,
+    };
     if s.menu_open {
         // The menu stays where it is; the player turns to the head once it closes.
         return None;

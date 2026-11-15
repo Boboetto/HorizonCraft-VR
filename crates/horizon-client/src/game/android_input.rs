@@ -221,6 +221,9 @@ pub(super) fn xr_gesture_active() -> bool {
 /// VR: a bow is held, so the right trigger draws its string (`xr_bow`), never attacks.
 static BOW_HELD: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
+/// VR: the right hand's blade this frame: from the controller to a held tool's tip.
+static XR_BLADE: Mutex<Option<([f64; 3], [f64; 3])>> = Mutex::new(None);
+
 /// VR: food or a potion is held at the mouth (the use button held by the gesture).
 static EATING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
@@ -449,6 +452,8 @@ impl super::Game<'_> {
     /// VR: the right controller's tip in the world and its speed in the room (metres a
     /// second). The room's speed is the hand's own: walking, jumping, falling or turning
     /// the body move the tip in the world, not in the room.
+    /// A held tool's tip is the blade's end (`vr_item_reach`), and `XR_BLADE` keeps the way
+    /// from the hand to it for the blow's test.
     fn xr_right_tip(&self) -> Option<([f64; 3], f64)> {
         use std::time::Instant;
         static LAST: Mutex<Option<(Instant, [f32; 3])>> = Mutex::new(None);
@@ -456,7 +461,15 @@ impl super::Game<'_> {
         let eye = self.eye_position()?;
         let hand = horizon_xr::last_hands()?[horizon_xr::Hand::RightAim as usize]?;
         let room = horizon_xr::room_hands()?[horizon_xr::Hand::RightAim as usize]?.to_array();
-        let tip = [0, 1, 2].map(|i| eye[i] + f64::from(hand.offset[i]));
+        let base = [0, 1, 2].map(|i| eye[i] + f64::from(hand.offset[i]));
+        let held = self.visible_hand_items()[0].clone();
+        let reach = match held.as_ref() {
+            Some(stack) if super::vr_is_tool(&stack.item) => f64::from(Self::vr_item_reach(Some(stack))),
+            _ => 0.0,
+        };
+        let along = hand.rotation * glam::Vec3::NEG_Z;
+        let tip = [0, 1, 2].map(|i| base[i] + f64::from(along[i]) * reach);
+        *XR_BLADE.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some((base, tip));
         let mut last = LAST.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let speed = last.map_or(0.0, |(t, p): (Instant, [f32; 3])| {
             let dt = now.duration_since(t).as_secs_f64().max(1e-3);
@@ -532,7 +545,9 @@ impl super::Game<'_> {
         };
         // The mouth: a little below the eyes; anywhere within 30 cm of it will do.
         let mouth = [eye[0], eye[1] - 0.12, eye[2]];
-        let near_mouth = (0..3).map(|i| (tip[i] - mouth[i]).powi(2)).sum::<f64>().sqrt() < 0.3;
+        let (base, blade_tip) =
+            XR_BLADE.lock().unwrap_or_else(std::sync::PoisonError::into_inner).unwrap_or((tip, tip));
+        let near_mouth = (0..3).map(|i| (base[i] - mouth[i]).powi(2)).sum::<f64>().sqrt() < 0.3;
         let edible = near_mouth
             && self.visible_hand_items()[0].as_ref().is_some_and(|stack| {
                 let components = self
@@ -545,10 +560,22 @@ impl super::Game<'_> {
         if EATING.swap(edible, std::sync::atomic::Ordering::Relaxed) != edible {
             s.mouse.push(MouseInput::Button(1, edible));
         }
-        let block = tip.map(|v| v.floor() as i32);
-        let struck = !edible
-            && speed >= 2.0
-            && !self.res.facts().is_air(self.world.block(block[0], block[1], block[2]));
+        // The first block along the blade (the hand alone without a tool), not air or a fluid.
+        let solid = |b: [i32; 3]| {
+            let state = self.world.block(b[0], b[1], b[2]);
+            !self.res.facts().is_air(state)
+                && !matches!(&*self.res.facts().get(state).name, "minecraft:water" | "minecraft:lava" | "minecraft:bubble_column")
+        };
+        let length = (0..3).map(|i| (blade_tip[i] - base[i]).powi(2)).sum::<f64>().sqrt();
+        let steps = (length / 0.05).ceil().max(1.0) as usize;
+        let block = (0..=steps)
+            .map(|k| {
+                let t = k as f64 / steps as f64;
+                [0, 1, 2].map(|i| (base[i] + (blade_tip[i] - base[i]) * t).floor() as i32)
+            })
+            .find(|&b| solid(b))
+            .unwrap_or_else(|| blade_tip.map(|v| v.floor() as i32));
+        let struck = !edible && speed >= 2.0 && solid(block);
         if struck {
             if mining.is_some_and(|(b, _)| b != block) {
                 s.mouse.push(MouseInput::Button(0, false));
@@ -765,6 +792,13 @@ impl super::Game<'_> {
         let aim = aim.filter(|_| playing);
         let other = other.filter(|_| playing);
         horizon_xr::set_aim_points(if look_left { [aim, other] } else { [other, aim] });
+        // Swimming goes where the head looks (the left stick's click sprints into a swim), and
+        // food held at the mouth in water must not point the swim down.
+        let head_look = self.player.as_ref().is_some_and(|p| {
+            p.fluids.was_touching_water
+                && (p.swimming || EATING.load(std::sync::atomic::Ordering::Relaxed))
+        });
+        horizon_xr::set_look_head(head_look);
         let Some((yaw, pitch)) = horizon_xr::look(self.yaw) else {
             return;
         };
