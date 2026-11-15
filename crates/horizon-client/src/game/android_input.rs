@@ -122,7 +122,12 @@ fn with_touch_controllers(mut pad: PadState, touch: horizon_xr::Pad) -> PadState
     for (held, button) in [
         (touch.a, Button::South),
         // In an inventory or a container B quick-moves (`xr_buttons`); Y closes it.
-        (touch.b && !CONTAINER_SCREEN.load(std::sync::atomic::Ordering::Relaxed), Button::East),
+        (
+            touch.b
+                && !CONTAINER_SCREEN.load(std::sync::atomic::Ordering::Relaxed)
+                && !CHAT_BUTTON.load(std::sync::atomic::Ordering::Relaxed),
+            Button::East,
+        ),
         // Y with X held throws the rest of the stack (`xr_buttons`), it opens nothing; in an
         // inventory Y closes it there, and opens nothing again until it is let go.
         (
@@ -206,6 +211,8 @@ pub(super) fn take_used() -> (bool, bool) {
 
 /// VR: an inventory or container screen is open: B quick-moves there instead of going back.
 static CONTAINER_SCREEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// VR: B opens the chat in play and closes it again (`xr_buttons`), it is no pad button there.
+static CHAT_BUTTON: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 /// VR: Y closed an inventory or container (`xr_buttons`): it opens nothing until let go.
 static Y_LATCH: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 /// VR: clicks queued with Shift held (`xr_buttons`); Shift lets go once they are handled.
@@ -906,6 +913,18 @@ impl super::Game<'_> {
         let container = in_menu && matches!(self.screen, super::Screen::Inventory | super::Screen::Creative);
         CONTAINER_SCREEN.store(container, Ordering::Relaxed);
         let playing = self.title.is_none() && self.screen == super::Screen::Playing;
+        // B: the chat, open on the menu's panel in the room (the headset's keyboard comes up
+        // for it, `touch_ime`), and B again closes it. Until B is let go it is not the pad's.
+        let chat = self.title.is_none() && self.screen == super::Screen::Chat;
+        if pressed(32) && playing {
+            CHAT_BUTTON.store(true, Ordering::Relaxed);
+            self.open_chat_method("");
+        } else if pressed(32) && chat {
+            CHAT_BUTTON.store(true, Ordering::Relaxed);
+            self.touch_back();
+        } else if now & 32 == 0 {
+            CHAT_BUTTON.store(playing || chat, Ordering::Relaxed);
+        }
         let throw = if pressed(1) {
             Some(false)
         } else if pad.x && pressed(2) {

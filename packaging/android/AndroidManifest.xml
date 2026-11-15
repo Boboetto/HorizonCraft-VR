@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="dev.horizonlab.horizon"
-    android:versionCode="52"
-    android:versionName="0.3.7-msaa4">
+    android:versionCode="53"
+    android:versionName="0.3.7-msaa5">
     <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="35" />
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
@@ -26,6 +26,8 @@
         </intent>
     </queries>
     <uses-feature android:name="android.hardware.vr.headtracking" android:version="1" android:required="false" />
+    <!-- Meta Quest: the headset's own keyboard shows over the game when a text field asks for it. -->
+    <uses-feature android:name="oculus.software.overlay_keyboard" android:required="false" />
     <uses-feature android:glEsVersion="0x00030000" android:required="true" />
     <uses-feature android:name="android.hardware.vulkan.version" android:version="0x400003" android:required="false" />
     <application
