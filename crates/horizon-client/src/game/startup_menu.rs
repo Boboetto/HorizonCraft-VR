@@ -1240,6 +1240,13 @@ impl Loading {
                 .options
                 .draw(&self.settings, batch, &gui.atlas, self.menu.cursor);
         } else if let Some(title) = &mut self.menu.title {
+            // VR: the intro plays once, from the title screen's first frame.
+            horizon_client::gfx::xr_intro::request(
+                gui.atlas
+                    .sprites
+                    .get(horizon_client::level_loading::MOJANG_STUDIOS_LOGO)
+                    .map(|r| [r.u0, r.v0, r.u1, r.v1]),
+            );
             title.poll_backup();
             if std::mem::take(&mut title.onboarding_finished) {
                 // Options.onboardingAccessibilityFinished.
