@@ -34,6 +34,12 @@ public class MsaLoginActivity extends Activity {
         s.setJavaScriptEnabled(true);
         s.setDomStorageEnabled(true);
         s.setSaveFormData(false);
+        // The page fits the window and can be zoomed: Microsoft's sign-in is small in a headset.
+        s.setUseWideViewPort(true);
+        s.setLoadWithOverviewMode(true);
+        s.setSupportZoom(true);
+        s.setBuiltInZoomControls(true);
+        s.setDisplayZoomControls(false);
         CookieManager.getInstance().setAcceptCookie(true);
         final ProgressBar spin = new ProgressBar(this);
         web.setWebViewClient(new WebViewClient() {
@@ -59,7 +65,39 @@ public class MsaLoginActivity extends Activity {
                 spin.setVisibility(View.GONE);
             }
         });
-        root.addView(web, new FrameLayout.LayoutParams(-1, -1));
+        // A bar above the page: start over (a stuck page, a code that never comes: the remembered
+        // session is forgotten and the sign-in opens again) and close.
+        android.widget.LinearLayout column = new android.widget.LinearLayout(this);
+        column.setOrientation(android.widget.LinearLayout.VERTICAL);
+        android.widget.LinearLayout bar = new android.widget.LinearLayout(this);
+        bar.setPadding(Ui.dp(this, 8), Ui.dp(this, 6), Ui.dp(this, 8), Ui.dp(this, 6));
+        bar.setBackgroundColor(Ui.BG);
+        android.widget.Button again = Ui.button(this, Ui.t("Начать заново", "Start over"), false);
+        android.widget.Button close = Ui.button(this, Ui.t("Закрыть", "Close"), false);
+        android.widget.TextView hint = Ui.text(this, Ui.t(
+                "Код не приходит? Выберите «Другие способы входа» и введите пароль.",
+                "No code by email? Choose \"Other ways to sign in\" and use your password."), 12, Ui.MUTED, false);
+        hint.setPadding(Ui.dp(this, 12), 0, Ui.dp(this, 12), 0);
+        bar.setGravity(android.view.Gravity.CENTER_VERTICAL);
+        bar.addView(again);
+        bar.addView(hint, new android.widget.LinearLayout.LayoutParams(0, -2, 1));
+        bar.addView(close);
+        again.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                CookieManager.getInstance().removeAllCookies(null);
+                CookieManager.getInstance().flush();
+                web.clearHistory();
+                web.loadUrl(Msa.liveAuthorizeUrl());
+            }
+        });
+        close.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                finish();
+            }
+        });
+        column.addView(bar, new android.widget.LinearLayout.LayoutParams(-1, -2));
+        column.addView(web, new android.widget.LinearLayout.LayoutParams(-1, 0, 1));
+        root.addView(column, new FrameLayout.LayoutParams(-1, -1));
         FrameLayout.LayoutParams sp = new FrameLayout.LayoutParams(Ui.dp(this, 40), Ui.dp(this, 40), android.view.Gravity.CENTER);
         root.addView(spin, sp);
         setContentView(root);
