@@ -8796,6 +8796,15 @@ impl Game<'_> {
     /// `Minecraft.pauseIfInactive`: a window without focus for more than 500 ms
     /// pauses the game. An open screen (books, signs, the pack prompt, a server
     /// dialog) stays instead of pausing (`Gui.setPauseScreen`).
+    /// VR runs: the window's focus says nothing there (the headset's keyboard takes it).
+    fn xr_running() -> bool {
+        #[cfg(target_os = "android")]
+        {
+            horizon_xr::active()
+        }
+        #[cfg(not(target_os = "android"))]
+        false
+    }
     fn pause_if_inactive(&mut self) {
         if self
             .focus_lost
@@ -8809,6 +8818,7 @@ impl Game<'_> {
             && self.sign_edit.is_none()
             && self.server_packs.prompt.is_none()
             && !self.dialog_open()
+            && !Self::xr_running()
         {
             self.pause_focus = None;
             self.screen = Screen::Paused;
@@ -19477,6 +19487,7 @@ impl Game<'_> {
                     let (action, sound) = self.title.as_mut().map_or((Action::None, false), |t| {
                         let clicked = t.click(self.cursor.0, self.cursor.1, (b.width, b.height));
                         t.press_field(atlas, self.cursor, (b.width, b.height), shift);
+                        self.touch.ime_field = t.pointer_on_field(self.cursor, (b.width, b.height));
                         let rules = t.press_rules(atlas, self.cursor, (b.width, b.height));
                         (clicked.0, clicked.1 || rules)
                     });

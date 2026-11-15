@@ -858,6 +858,8 @@ impl super::Game<'_> {
                 self.modifiers = winit::keyboard::ModifiersState::empty();
             }
             s.mouse.push(MouseInput::Button(0, click));
+            // A click on a text field brings the keyboard back after the headset hid it.
+            self.touch.ime_retap |= click;
         }
     }
     /// VR: a use (the left trigger) goes along the left controller, for that moment only:
@@ -916,9 +918,16 @@ impl super::Game<'_> {
         // B: the chat, open on the menu's panel in the room (the headset's keyboard comes up
         // for it, `touch_ime`), and B again closes it. Until B is let go it is not the pad's.
         let chat = self.title.is_none() && self.screen == super::Screen::Chat;
+        // It opens as B is let go: the headset's keyboard, coming up with B still held, took
+        // its release for its own "back" and went away with the chat.
+        static CHAT_ARMED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
         if pressed(32) && playing {
             CHAT_BUTTON.store(true, Ordering::Relaxed);
-            self.open_chat_method("");
+            CHAT_ARMED.store(true, Ordering::Relaxed);
+        } else if released(32) && CHAT_ARMED.swap(false, Ordering::Relaxed) {
+            if playing {
+                self.open_chat_method("");
+            }
         } else if pressed(32) && chat {
             CHAT_BUTTON.store(true, Ordering::Relaxed);
             self.touch_back();

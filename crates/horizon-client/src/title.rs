@@ -4019,6 +4019,12 @@ Would you like to enable the Narrator or visit the Accessibility Settings?",
             _ => None,
         }
     }
+    /// Whether the pointer is over the focused field's box (VR brings the headset's keyboard
+    /// up for a click there, not for a field that has the focus as its screen opens).
+    pub fn pointer_on_field(&self, (x, y): (f32, f32), size: (f32, f32)) -> bool {
+        self.focused_rect((size.0.ceil(), size.1.ceil()))
+            .is_some_and(|[fx, fy, fw, fh]| crate::ui::hovered((x, y), fx, fy, fw, fh))
+    }
     /// A left press after `click` focused a field: the cursor goes under the
     /// pointer (`EditBox.onClick`).
     pub fn press_field(

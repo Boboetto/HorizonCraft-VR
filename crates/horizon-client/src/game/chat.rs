@@ -1395,6 +1395,23 @@ impl Game<'_> {
         let now = self.visual_ticks() as f32 + self.clock.fraction() as f32;
         let lift = if focused { Self::chat_lift(batch) } else { 0.0 };
         batch.height -= lift;
+        // VR: the open chat is a window on the panel in the room, as the inventory is (the
+        // panel keeps only what is opaque, so the chat's own veils would not show).
+        #[cfg(target_os = "android")]
+        if focused && horizon_xr::active() {
+            use horizon_client::hud_layout::fill;
+            let o = &self.ui.chat.options;
+            let (w, h) = (batch.width as i32, batch.height as i32);
+            let lines = (o.height_px(true) as f32 * o.scale as f32).ceil() as i32;
+            let top = (h - 40 - lines - 8).max(0);
+            let window = [
+                fill(0, top, w, h, 0xFF8B_8B8B),
+                fill(1, top + 1, w - 1, h - 1, 0xFF14_161C),
+                fill(1, h - 16, w - 1, h - 15, 0xFF8B_8B8B),
+                fill(1, h - 15, w - 1, h - 1, 0xFF00_0000),
+            ];
+            horizon_client::hud_layout::paint(batch, &self.gui.atlas, &window);
+        }
         self.ui.chat.draw(batch, &self.gui.atlas, now, focused);
         batch.height += lift;
     }

@@ -446,7 +446,11 @@ pub(super) struct Touches {
     /// The soft keyboard was asked for.
     ime_shown: bool,
     /// A menu tap since the last frame: ask for the keyboard again if a field wants it.
-    ime_retap: bool,
+    pub(super) ime_retap: bool,
+    /// The last click on the title's screens was on the focused text field (VR: the
+    /// keyboard comes for that click, not for a field focused as its screen opens).
+    #[cfg_attr(not(target_os = "android"), allow(dead_code))]
+    pub(super) ime_field: bool,
     /// A controller, keyboard or mouse plays: the controls are hidden until a touch.
     pub(super) hardware: bool,
     /// A mouse has been used: the pointer is captured while playing.
@@ -476,6 +480,7 @@ impl Default for Touches {
             press_at: [0.0; 2],
             ime_shown: false,
             ime_retap: false,
+            ime_field: false,
             hardware: false,
             mouse: false,
             pointer_captured: None,
@@ -1144,7 +1149,11 @@ impl Game<'_> {
             || (self.screen == super::Screen::WorldOptions
                 && self.world_options.as_ref().and_then(|o| o.rules.as_ref()).is_some_and(|r| r.typing()))
             || (self.screen != super::Screen::Options
-                && self.title.as_mut().is_some_and(|t| t.focused_field().is_some()));
+                && self.title.as_mut().is_some_and(|t| t.focused_field().is_some())
+                && (self.touch.ime_field || !horizon_xr::active()));
+        if self.title.as_mut().is_none_or(|t| t.focused_field().is_none()) {
+            self.touch.ime_field = false;
+        }
         if want != self.touch.ime_shown || (want && self.touch.ime_retap) {
             self.touch.ime_shown = want;
             android_ime::show(want);
