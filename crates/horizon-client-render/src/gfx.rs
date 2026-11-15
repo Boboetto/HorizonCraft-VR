@@ -176,6 +176,7 @@ mod displace;
 pub mod lightning;
 mod lod;
 mod xr_panel;
+mod msaa;
 mod native_material;
 mod native_pack;
 mod native_post;
@@ -1082,6 +1083,10 @@ pub struct Renderer {
     xr_hud: Option<wgpu::Texture>,
     /// VR: the pass that draws the open menu's panel into the eyes (`xr_panel`).
     xr_panel: Option<xr_panel::XrPanel>,
+    /// VR's multisampled world pass (`msaa`), where `msaa_samples` > 1.
+    msaa: Option<msaa::Msaa>,
+    /// Whether the last world pass took MSAA (VR's log).
+    msaa_used: bool,
     /// Offscreen submissions still on the GPU: at most two frames run ahead.
     in_flight: std::collections::VecDeque<wgpu::SubmissionIndex>,
     /// Splitscreen: the caller waits for the GPU once every player has submitted
@@ -1539,6 +1544,38 @@ fn requested_split() -> Option<u32> {
 /// Fast Opaque Pass on Android (`Renderer::set_opaque_split`).
 static ANDROID_SPLIT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
 /// Solid terrain in two passes (`Renderer::opaque_split`).
+/// VR's multisampling (`HORIZON_XR_MSAA`, on unless "0"/"off"): the samples of the world
+/// pass's sky, solid terrain and entities, resolved into the world target. 1 = off.
+static MSAA_SAMPLES: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1);
+
+pub(crate) fn msaa_samples() -> u32 {
+    MSAA_SAMPLES.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// The samples for this renderer: 4 in VR where the frame and depth formats take them.
+fn pick_msaa(adapter: &wgpu::Adapter, frame_format: wgpu::TextureFormat) -> u32 {
+    #[cfg(target_os = "android")]
+    let vr = horizon_xr::active();
+    #[cfg(not(target_os = "android"))]
+    let vr = false;
+    let wanted = !matches!(
+        std::env::var("HORIZON_XR_MSAA").as_deref(),
+        Ok("0") | Ok("off") | Ok("false")
+    );
+    let color = adapter.get_texture_format_features(frame_format);
+    let depth = adapter.get_texture_format_features(wgpu::TextureFormat::Depth32Float);
+    let ok = color.flags.sample_count_supported(4)
+        && color
+            .flags
+            .contains(wgpu::TextureFormatFeatureFlags::MULTISAMPLE_RESOLVE)
+        && depth.flags.sample_count_supported(4);
+    let samples = if vr && wanted && ok { 4 } else { 1 };
+    if vr {
+        log::info!("Horizon VR: MSAA {samples}x (wanted {wanted}, supported {ok})");
+    }
+    samples
+}
+
 fn split_solid_on(backend: wgpu::Backend, no_gpu_culling: bool) -> bool {
     backend == wgpu::Backend::Metal
         || ((cfg!(target_os = "android") || android_paths())
@@ -2756,6 +2793,11 @@ impl Renderer {
             config.format,
             linear,
         );
+        let msaa = pick_msaa(&adapter, frame_format);
+        MSAA_SAMPLES.store(msaa, std::sync::atomic::Ordering::Relaxed);
+        // The sample count the pipeline helpers below build with: 1, then `msaa` for the
+        // multisampled copies of the world pass's first part (`Msaa`).
+        let samples = std::cell::Cell::new(1u32);
         if previous.is_none() {
             startup_step(format_args!("creating the pipelines"));
         }
@@ -2925,7 +2967,10 @@ impl Renderer {
                     stencil: Default::default(),
                     bias: Default::default(),
                 }),
-                multisample: Default::default(),
+                multisample: wgpu::MultisampleState {
+                    count: samples.get(),
+                    ..Default::default()
+                },
                 fragment: Some(wgpu::FragmentState {
                     module: &shader,
                     entry_point: Some(fragment),
@@ -3087,7 +3132,8 @@ impl Renderer {
             false,
             None,
         );
-        let sky_base = pipeline(
+        let make_sky_base = || {
+            pipeline(
             "Sky base",
             "vs_sky",
             "fs_sky_base",
@@ -3097,7 +3143,9 @@ impl Renderer {
             false,
             false,
             None,
-        );
+        )
+        };
+        let sky_base = make_sky_base();
         let sunrise_attributes = wgpu::vertex_attr_array![0=>Float32x4, 1=>Float32];
         let sunrise_buffers = [Some(wgpu::VertexBufferLayout {
             array_stride: 20,
@@ -3117,7 +3165,8 @@ impl Renderer {
                 operation: wgpu::BlendOperation::Add,
             },
         };
-        let sunrise_pipeline = pipeline(
+        let make_sunrise = || {
+            pipeline(
             "Sunrise fan",
             "vs_sunrise",
             "fs_sunrise",
@@ -3127,8 +3176,11 @@ impl Renderer {
             false,
             false,
             Some(sunrise_blend),
-        );
-        let dark_disc = pipeline(
+        )
+        };
+        let sunrise_pipeline = make_sunrise();
+        let make_dark_disc = || {
+            pipeline(
             "Dark disc",
             "vs_sky",
             "fs_dark_disc",
@@ -3138,7 +3190,9 @@ impl Renderer {
             false,
             false,
             Some(alpha_blend),
-        );
+        )
+        };
+        let dark_disc = make_dark_disc();
         let depth_reset = kept.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("Hand depth reset"),
             layout: Some(&layout),
@@ -3856,7 +3910,10 @@ impl Renderer {
                     stencil: Default::default(),
                     bias,
                 }),
-                multisample: Default::default(),
+                multisample: wgpu::MultisampleState {
+                    count: samples.get(),
+                    ..Default::default()
+                },
                 fragment: Some(wgpu::FragmentState {
                     module: &entity_shader,
                     entry_point: Some(fragment),
@@ -4007,7 +4064,8 @@ impl Renderer {
         // ulps and the tie came out either way, as a jagged strip of the trapdoor
         // through the hull's floor. The same constant as the shadows' covers that
         // spread; a model's feet sit 0.001 above the ground, far beyond it.
-        let entity_pipeline = entity_pipeline(
+        let make_entity = || {
+            entity_pipeline(
             "Entities",
             None,
             true,
@@ -4019,8 +4077,10 @@ impl Renderer {
             },
             alpha_blend,
             false,
-        );
-        let static_entity_pipeline =
+        )
+        };
+        let entity_pipeline = make_entity();
+        let make_static_entity = || {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some("Static block entities"),
                 layout: Some(&static_entity_layout),
@@ -4038,7 +4098,10 @@ impl Renderer {
                     stencil: Default::default(),
                     bias: Default::default(),
                 }),
-                multisample: Default::default(),
+                multisample: wgpu::MultisampleState {
+                count: samples.get(),
+                ..Default::default()
+            },
                 fragment: Some(wgpu::FragmentState {
                     module: &static_entity_shader,
                     entry_point: Some("fs_entity"),
@@ -4054,7 +4117,9 @@ impl Renderer {
                 }),
                 multiview_mask: None,
                 cache: None,
-            });
+            })
+        };
+        let static_entity_pipeline = make_static_entity();
         // RenderPipelines.ENERGY_SWIRL: BlendFunction.ADDITIVE (one, one), no culling; no depth
         // writes either: vanilla sorts the quads far to near, so every face passes the test.
         let one_one = wgpu::BlendComponent {
@@ -4202,7 +4267,8 @@ impl Renderer {
             },
             ..additive_descriptor
         });
-        let celestial_pipeline = kept.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        let make_celestial = || {
+            kept.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("Celestial bodies"),
             layout: Some(&entity_layout),
             vertex: wgpu::VertexState {
@@ -4222,7 +4288,10 @@ impl Renderer {
                 stencil: Default::default(),
                 bias: Default::default(),
             }),
-            multisample: Default::default(),
+            multisample: wgpu::MultisampleState {
+                count: samples.get(),
+                ..Default::default()
+            },
             fragment: Some(wgpu::FragmentState {
                 module: &entity_shader,
                 entry_point: Some("fs_sky_celestial"),
@@ -4250,7 +4319,9 @@ impl Renderer {
             }),
             multiview_mask: None,
             cache: None,
-        });
+        })
+        };
+        let celestial_pipeline = make_celestial();
         drop(entity_step);
         // WorldBorderRenderer: misc/forcefield.png as a MipmappedTexture
         // (repeat, linear minification with mipmaps, nearest magnification).
@@ -4610,6 +4681,58 @@ impl Renderer {
             }
             None => (solid, solid_opaque, solid_cutout, solid_mirror),
         };
+        // VR's MSAA: the world pass's first part again, multisampled.
+        let msaa_set = (msaa > 1).then(|| {
+            samples.set(msaa);
+            let (solid, solid_opaque, solid_cutout) = match &flat {
+                Some(f) => {
+                    let pulled_layout = kept.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                        label: Some("Horizon terrain layout (pulled)"),
+                        bind_group_layouts: &[Some(&bindings), Some(&f.draw_layout)],
+                        ..Default::default()
+                    });
+                    let origins = [None, terrain_buffers[1].clone()];
+                    let solid = |label: &str, vertex: &str, fragment: &str| {
+                        solid_in(&pulled_layout, label, vertex, fragment, &origins)
+                    };
+                    (
+                        solid("Terrain solid", "vs_section", "fs_solid"),
+                        solid("Terrain solid opaque", "vs_section_opaque", "fs_opaque"),
+                        solid("Terrain solid cutout", "vs_section_cutout", "fs_solid"),
+                    )
+                }
+                None => (
+                    solid_in(&layout, "Terrain solid", "vs_terrain", "fs_solid", &terrain_buffers),
+                    solid_in(
+                        &layout,
+                        "Terrain solid opaque",
+                        "vs_terrain_opaque",
+                        "fs_opaque",
+                        &terrain_buffers,
+                    ),
+                    solid_in(
+                        &layout,
+                        "Terrain solid cutout",
+                        "vs_terrain_cutout",
+                        "fs_solid",
+                        &terrain_buffers,
+                    ),
+                ),
+            };
+            let pipelines = msaa::Pipelines {
+                sky_base: make_sky_base(),
+                sunrise: make_sunrise(),
+                dark_disc: make_dark_disc(),
+                celestial: make_celestial(),
+                static_entity: make_static_entity(),
+                entity: make_entity(),
+                solid,
+                solid_opaque,
+                solid_cutout,
+            };
+            samples.set(1);
+            msaa::Msaa::new(&device, msaa, pipelines)
+        });
         // The solid quads in the compact layout, while no shader pack reads the arena
         // (`follow_packed_layout`).
         let packed_quads = flat.is_some() && !shader_pack && packed_wanted();
@@ -4763,6 +4886,8 @@ impl Renderer {
             xr_hud_skip: false,
             xr_hud: None,
             xr_panel: None,
+            msaa: msaa_set,
+            msaa_used: false,
             in_flight: std::collections::VecDeque::new(),
             paced_elsewhere: false,
             first_frame: if previous.is_none() {
@@ -7537,7 +7662,7 @@ impl Renderer {
         horizon_xr::note_renderer(|| {
             format!(
                 "sections resident {}, drawn {}, draws {}, draw calls {}, indices {}k, culled {:?}, GPU \
-                 culling {}, size {}x{}; slowest passes (ms per eye) {}",
+                 culling {}, MSAA {}, size {}x{}; slowest passes (ms per eye) {}",
                 self.resident_sections(),
                 self.drawn_sections,
                 self.section_draws,
@@ -7545,6 +7670,7 @@ impl Renderer {
                 self.section_indices / 1000,
                 self.culled_sections(),
                 self.gpu_culling(),
+                if self.msaa_used { msaa_samples() } else { 0 },
                 self.config.width,
                 self.config.height,
                 {
@@ -10110,10 +10236,40 @@ impl Renderer {
             let depth = world_depth.texture();
             vis.fit(&self.device, [depth.width(), depth.height()], flat);
         }
+        // VR's MSAA (`msaa`): only a world pass that is one plain pass, without packs,
+        // culling passes, the visibility buffer, OIT, HDR or the skies it has no copies for.
+        let msaa_frame = self.msaa.is_some()
+            && !frame.title
+            && !frame.end_sky
+            && !self.custom_sky.is_drawing()
+            && self.native.is_none()
+            && !pack_post
+            && !pack_terrain
+            && !pack_draws_terrain
+            && material.is_none()
+            && surface.is_none()
+            && cull.is_none()
+            && !gpu_frame
+            && !gpu_occluding
+            && !vis_frame
+            && !oit_on
+            && !flat_frame
+            && !hdr
+            && !native_sky_pass
+            && shadow_view.is_none();
+        if msaa_frame && let Some(ms) = self.msaa.as_mut() {
+            let t = world_depth.texture();
+            ms.fit(&self.device, [t.width(), t.height()], world_view.texture().format());
+        }
+        self.msaa_used = msaa_frame;
+        let ms = self.msaa.as_ref().filter(|_| msaa_frame);
+        let ms_views = ms.and_then(|m| m.views());
+        let ms = ms.filter(|_| ms_views.is_some());
+        let msp = ms.map(|m| &m.pipelines);
         {
             let attachments = [Some(wgpu::RenderPassColorAttachment {
-                view: world_view,
-                resolve_target: None,
+                view: ms_views.map_or(world_view, |v| v.0),
+                resolve_target: ms_views.map(|_| world_view),
                 depth_slice: None,
                 ops: wgpu::Operations {
                     load: if native_sky_pass {
@@ -10121,7 +10277,11 @@ impl Renderer {
                     } else {
                         wgpu::LoadOp::Clear(clear)
                     },
-                    store: wgpu::StoreOp::Store,
+                    store: if ms_views.is_some() {
+                        wgpu::StoreOp::Discard
+                    } else {
+                        wgpu::StoreOp::Store
+                    },
                 },
             })];
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -10129,12 +10289,17 @@ impl Renderer {
                 timestamp_writes: self.own_timing.as_mut().and_then(|t| t.writes("World")),
                 color_attachments: &attachments,
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: world_depth,
+                    view: ms_views.map_or(world_depth, |v| v.1),
                     depth_ops: Some(wgpu::Operations {
                         load: wgpu::LoadOp::Clear(0.0),
                         // The visibility buffer's passes, and those after an occlusion test,
-                        // draw on after it.
-                        store: if cull.is_some() || gpu_occluding || keep_depth || vis_frame {
+                        // draw on after it; MSAA's depth is copied after its part.
+                        store: if cull.is_some()
+                            || gpu_occluding
+                            || keep_depth
+                            || vis_frame
+                            || ms_views.is_some()
+                        {
                             wgpu::StoreOp::Store
                         } else {
                             wgpu::StoreOp::Discard
@@ -10155,10 +10320,12 @@ impl Renderer {
                     {
                         Some((sky, native)) => sky.draw(&mut pass, native),
                         None => {
-                            pass.set_pipeline(&self.sky_base);
+                            pass.set_pipeline(msp.map_or(&self.sky_base, |m| &m.sky_base));
                             pass.draw(0..3, 0..1);
                             if frame.sky.sunrise_color[3] > 0.001 {
-                                pass.set_pipeline(&self.sunrise_pipeline);
+                                pass.set_pipeline(
+                                    msp.map_or(&self.sunrise_pipeline, |m| &m.sunrise),
+                                );
                                 pass.set_vertex_buffer(0, self.sunrise_buffer.slice(..));
                                 pass.draw(0..sunrise_fan::VERTICES as u32, 0..1);
                             }
@@ -10175,7 +10342,7 @@ impl Renderer {
                     self.panorama.draw(&mut pass);
                     pass.set_bind_group(0, &self.group, &[]);
                 } else if celestial_vertices > 0 || frame.end_sky {
-                    pass.set_pipeline(&self.celestial_pipeline);
+                    pass.set_pipeline(msp.map_or(&self.celestial_pipeline, |m| &m.celestial));
                     pass.set_bind_group(0, &self.entity_group, &[]);
                     pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
                     if frame.end_sky {
@@ -10207,11 +10374,11 @@ impl Renderer {
                     .as_ref()
                     .is_some_and(|n| n.sky.is_some() && !n.vanilla_stars);
                 if !frame.title && frame.stars.is_some() && !pack_draws_sky && !own_stars {
-                    self.stars.draw(&mut pass);
+                    self.stars.draw_ms(&mut pass, msp.is_some());
                     pass.set_bind_group(0, &self.group, &[]);
                 }
                 if !frame.title && frame.dark_disc && !pack_draws_sky {
-                    pass.set_pipeline(&self.dark_disc);
+                    pass.set_pipeline(msp.map_or(&self.dark_disc, |m| &m.dark_disc));
                     pass.draw(0..3, 0..1);
                 }
             }
@@ -10363,16 +10530,21 @@ impl Renderer {
                     let passes: &[(&wgpu::RenderPipeline, Draws, Draws)] = match material {
                         None if split_solid => &[
                             (
-                                self.solid_opaque.get(hdr),
+                                msp.map_or(&self.solid_opaque, |m| &m.solid_opaque).get(hdr),
                                 0..opaque,
                                 phase1_draws..phase2_cutout,
                             ),
                             (
-                                self.solid_cutout.get(hdr),
+                                msp.map_or(&self.solid_cutout, |m| &m.solid_cutout).get(hdr),
                                 cutout..phase1_draws,
                                 phase2_cutout..solid_draws,
                             ),
                         ],
+                        None if msp.is_some() => &[(
+                            msp.map_or(solid_pipeline, |m| m.solid.get(hdr)),
+                            0..phase1_draws,
+                            phase1_draws..solid_draws,
+                        )],
                         _ => &[(solid_pipeline, 0..phase1_draws, phase1_draws..solid_draws)],
                     };
                     // The vanilla solid pipelines read the page themselves; a native
@@ -10524,7 +10696,7 @@ impl Renderer {
                 pass = plain_pass(&mut encoder);
             }
             if static_entity_quads > 0 {
-                pass.set_pipeline(&self.static_entity_pipeline);
+                pass.set_pipeline(msp.map_or(&self.static_entity_pipeline, |m| &m.static_entity));
                 pass.set_bind_group(0, &self.entity_group, &[]);
                 pass.set_bind_group(1, &self.static_entity_group, &[]);
                 pass.set_index_buffer(
@@ -10547,7 +10719,7 @@ impl Renderer {
             }
             pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
             if entity_quads > 0 {
-                pass.set_pipeline(&self.entity_pipeline);
+                pass.set_pipeline(msp.map_or(&self.entity_pipeline, |m| &m.entity));
                 pass.set_bind_group(0, &self.entity_group, &[]);
                 pass.set_vertex_buffer(0, self.entity_buffer.slice(..));
                 pass.draw_indexed(0..entity_quads * 6, 0, 0..1);
@@ -10556,6 +10728,22 @@ impl Renderer {
                     pass.draw_indexed(0..entity_quads * 6, 0, 0..1);
                 }
                 pass.set_bind_group(0, &self.group, &[]);
+            }
+            // MSAA's part ends: its colour resolves into the world target, its depth's first
+            // sample goes to the world's depth, and the rest of the world draws on over both.
+            if let Some(ms) = ms {
+                drop(pass);
+                ms.copy_depth(&mut encoder, world_depth);
+                pass = world_pass_after_culling(
+                    &mut encoder,
+                    world_view,
+                    world_depth,
+                    keep_depth,
+                    self.own_timing.as_mut(),
+                    "World after MSAA",
+                );
+                pass.set_bind_group(0, &self.group, &[]);
+                pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
             }
             if text_quads > 0 && !oit_on {
                 pass.set_pipeline(&self.text_polygon_offset_pipeline);

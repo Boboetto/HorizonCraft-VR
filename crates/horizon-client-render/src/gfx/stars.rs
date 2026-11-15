@@ -50,6 +50,8 @@ struct Uniform {
 
 pub(super) struct Stars {
     pipeline: wgpu::RenderPipeline,
+    /// The multisampled copy for VR's MSAA world pass (`super::msaa`).
+    msaa: Option<wgpu::RenderPipeline>,
     group: wgpu::BindGroup,
     uniform: wgpu::Buffer,
     vertices: wgpu::Buffer,
@@ -101,7 +103,7 @@ impl Stars {
             ..Default::default()
         });
         let attributes = wgpu::vertex_attr_array![0 => Float32x3];
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        let build = |samples: u32| device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("Stars"),
             layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState {
@@ -125,7 +127,10 @@ impl Stars {
                 stencil: Default::default(),
                 bias: Default::default(),
             }),
-            multisample: Default::default(),
+            multisample: wgpu::MultisampleState {
+                count: samples,
+                ..Default::default()
+            },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
                 entry_point: Some("fs_stars"),
@@ -148,8 +153,12 @@ impl Stars {
             multiview_mask: None,
             cache: None,
         });
+        let pipeline = build(1);
+        let samples = super::msaa_samples();
+        let msaa = (samples > 1).then(|| build(samples));
         Self {
             pipeline,
+            msaa,
             group,
             uniform,
             vertices,
@@ -175,7 +184,13 @@ impl Stars {
     }
 
     pub(super) fn draw(&self, pass: &mut wgpu::RenderPass<'_>) {
-        pass.set_pipeline(&self.pipeline);
+        self.draw_ms(pass, false);
+    }
+
+    /// `draw`, into the multisampled targets when `msaa`.
+    pub(super) fn draw_ms(&self, pass: &mut wgpu::RenderPass<'_>, msaa: bool) {
+        let pipeline = self.msaa.as_ref().filter(|_| msaa).unwrap_or(&self.pipeline);
+        pass.set_pipeline(pipeline);
         pass.set_bind_group(0, &self.group, &[]);
         pass.set_vertex_buffer(0, self.vertices.slice(..));
         pass.draw(0..self.count, 0..1);

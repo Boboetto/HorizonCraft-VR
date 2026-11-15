@@ -237,13 +237,16 @@ public class ProfileActivity extends Activity implements View.OnClickListener {
                 "A sharp image, with as many chunks as the game draws smoothly."),
                 12, Ui.MUTED, false));
         final Button paceButton = Ui.button(this, "", false);
+        final Button msaaButton = Ui.button(this, "", false);
         final boolean[] pace = {vrSetting("pace", 1) != 0};
+        msaaOn = vrSetting("msaa", 1) != 0;
         // One mode, Quality: a sharp image with the chunks it can draw smoothly. Applied once
         // (the game's options can still be changed in the game afterwards).
         if (!"quality".equals(vrMode()) || vrSetting("scale", 0) < 1.35f) applyMode("quality", pace[0]);
         final Runnable showVr = new Runnable() {
             public void run() {
                 paceButton.setText(Ui.t("Ровные кадры: ", "Frame pacing: ") + (pace[0] ? "Auto" : "Off"));
+                msaaButton.setText("Antialiasing MSAA: " + (msaaOn ? "4x" : "Off"));
             }
         };
         showVr.run();
@@ -255,7 +258,19 @@ public class ProfileActivity extends Activity implements View.OnClickListener {
             }
         });
         card.addView(Ui.text(this, "Quality · 1.4x · 90 Hz · 6 chunks · anisotropic 8x", 13, Ui.TEXT, true));
+        msaaButton.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                msaaOn = !msaaOn;
+                saveVr(1.4f, 90, pace[0]);
+                showVr.run();
+            }
+        });
         card.addView(paceButton, Ui.gap(this, 6));
+        card.addView(msaaButton, Ui.gap(this, 6));
+        card.addView(Ui.text(this, Ui.t(
+                "MSAA сглаживает края блоков вдали. Если игра не запускается или тормозит, выключите его.",
+                "MSAA smooths the shimmering edges of far blocks. If the game does not start or runs slowly, turn it off."),
+                12, Ui.MUTED, false));
         card.addView(Ui.text(this, Ui.t(
                 "Ровные кадры: если игра не успевает, она рисует каждый второй кадр ровно, без рывков.",
                 "Frame pacing: when the game cannot keep up, it draws every second frame evenly instead of unevenly, without micro-stutter."),
@@ -446,7 +461,7 @@ public class ProfileActivity extends Activity implements View.OnClickListener {
             scale = 1.0f; hz = 72; distance = 9; simulation = 8; clouds = "\"fast\""; particles = "0"; biome = 2; entities = "1.0";
         }
         try (java.io.FileWriter w = new java.io.FileWriter(vrFile())) {
-            w.write(String.format(java.util.Locale.ROOT, "mode=%s\nscale=%.1f\nhz=%d\npace=%d\n", mode, scale, hz, pace ? 1 : 0));
+            w.write(String.format(java.util.Locale.ROOT, "mode=%s\nscale=%.1f\nhz=%d\npace=%d\nmsaa=%d\n", mode, scale, hz, pace ? 1 : 0, msaaOn ? 1 : 0));
         } catch (Exception ignored) {
         }
         java.util.LinkedHashMap<String, String> set = new java.util.LinkedHashMap<>();
@@ -482,9 +497,12 @@ public class ProfileActivity extends Activity implements View.OnClickListener {
         }
     }
 
+    /** VR's MSAA (horizon-vr.txt `msaa=`), on by default. */
+    private boolean msaaOn = true;
+
     private void saveVr(float scale, int hz, boolean pace) {
         try (java.io.FileWriter w = new java.io.FileWriter(vrFile())) {
-            w.write(String.format(java.util.Locale.ROOT, "mode=quality\nscale=%.1f\nhz=%d\npace=%d\n", scale, hz, pace ? 1 : 0));
+            w.write(String.format(java.util.Locale.ROOT, "mode=quality\nscale=%.1f\nhz=%d\npace=%d\nmsaa=%d\n", scale, hz, pace ? 1 : 0, msaaOn ? 1 : 0));
         } catch (Exception ignored) {
         }
     }

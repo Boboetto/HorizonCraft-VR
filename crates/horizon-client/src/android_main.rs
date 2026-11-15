@@ -56,6 +56,10 @@ fn android_main(app: AndroidApp) {
             // SAFETY: still before the game starts its threads.
             unsafe { std::env::set_var("HORIZON_XR_PACE", "off") };
         }
+        if text.lines().any(|l| l.trim() == "msaa=0") && std::env::var_os("HORIZON_XR_MSAA").is_none() {
+            // SAFETY: still before the game starts its threads.
+            unsafe { std::env::set_var("HORIZON_XR_MSAA", "off") };
+        }
         for (key, var) in [("scale", "HORIZON_XR_SCALE"), ("hz", "HORIZON_XR_HZ")] {
             let value = text
                 .lines()
