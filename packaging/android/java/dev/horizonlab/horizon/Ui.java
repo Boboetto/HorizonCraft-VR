@@ -152,6 +152,52 @@ final class Ui {
         return d;
     }
 
+    /**
+     * The launcher's own stone texture, in black and white: a 16x16 tile drawn here (no game
+     * file), scaled up without smoothing and repeated. `bricks`: staggered bricks with dark
+     * mortar, a lit top-left edge and a shaded bottom-right one, for the pages; else a smooth
+     * speckled slab with a few cracks, for the menu and the bars. `light`: the fill's grey.
+     */
+    static android.graphics.drawable.Drawable stone(Context c, boolean bricks, int light) {
+        java.util.Random random = new java.util.Random(bricks ? 41 : 17);
+        android.graphics.Bitmap tile = android.graphics.Bitmap.createBitmap(16, 16, android.graphics.Bitmap.Config.ARGB_8888);
+        for (int y = 0; y < 16; y++) {
+            for (int x = 0; x < 16; x++) {
+                int v = light + random.nextInt(7) - 3;
+                if (bricks) {
+                    // Two rows of bricks, 8 pixels tall, the lower one shifted by half a brick.
+                    int row = y / 8, by = y % 8, bx = (x + (row == 0 ? 0 : 8)) % 16;
+                    if (by == 7 || bx == 15) v = light / 3;
+                    else if (by == 0 || bx == 0) v = light + 9;
+                    else if (by == 6 || bx == 14) v = light - 6;
+                } else if (random.nextInt(22) == 0) {
+                    v = light + 10;
+                }
+                v = Math.max(0, Math.min(255, v));
+                tile.setPixel(x, y, Color.rgb(v, v, v + 2));
+            }
+        }
+        if (!bricks) {
+            // A crack or two across the slab.
+            int[][] crack = {{2, 3}, {3, 4}, {4, 4}, {5, 5}, {6, 5}, {11, 10}, {12, 11}, {12, 12}, {13, 13}};
+            for (int[] at : crack) tile.setPixel(at[0], at[1], Color.rgb(light / 3, light / 3, light / 3));
+        }
+        int size = dp(c, 64);
+        android.graphics.Bitmap big = android.graphics.Bitmap.createScaledBitmap(tile, size, size, false);
+        android.graphics.drawable.BitmapDrawable d = new android.graphics.drawable.BitmapDrawable(c.getResources(), big);
+        d.setTileModeXY(android.graphics.Shader.TileMode.REPEAT, android.graphics.Shader.TileMode.REPEAT);
+        d.setFilterBitmap(false);
+        return d;
+    }
+
+    /** `texture` under a white outline `px` wide: a textured panel. */
+    static android.graphics.drawable.Drawable framed(Context c, android.graphics.drawable.Drawable texture, float px) {
+        android.graphics.drawable.GradientDrawable edge = new android.graphics.drawable.GradientDrawable();
+        edge.setColor(Color.TRANSPARENT);
+        edge.setStroke(dp(c, px), EDGE);
+        return new android.graphics.drawable.LayerDrawable(new android.graphics.drawable.Drawable[] {texture, edge});
+    }
+
     /** A full-screen background with a centered card; returns the card to fill. */
     static LinearLayout card(android.app.Activity a) {
         FrameLayout root = new FrameLayout(a);

@@ -298,7 +298,8 @@ public class ProfileActivity extends Activity implements View.OnClickListener {
         // A launcher's classic layout: a menu down the left that folds to its icons, and the
         // pages beside it. The home page is the night-sky picture with Play in a bar below.
         root.setPadding(0, 0, 0, 0);
-        root.setBackgroundColor(Ui.BG);
+        // Stone bricks behind the pages, smooth slabs for the menu and the Play bar.
+        root.setBackground(Ui.stone(this, true, 26));
         final FrameLayout content = new FrameLayout(this);
         LinearLayout home = new LinearLayout(this);
         home.setOrientation(LinearLayout.VERTICAL);
@@ -313,7 +314,7 @@ public class ProfileActivity extends Activity implements View.OnClickListener {
         LinearLayout bar = new LinearLayout(this);
         bar.setOrientation(LinearLayout.HORIZONTAL);
         bar.setGravity(Gravity.CENTER_VERTICAL);
-        bar.setBackground(Ui.rounded(this, Color.rgb(16, 16, 18), Ui.EDGE, 0));
+        bar.setBackground(Ui.framed(this, Ui.stone(this, false, 20), 1));
         bar.setPadding(Ui.dp(this, 20), Ui.dp(this, 10), Ui.dp(this, 20), Ui.dp(this, 10));
         LinearLayout info = new LinearLayout(this);
         info.setOrientation(LinearLayout.VERTICAL);
@@ -323,7 +324,7 @@ public class ProfileActivity extends Activity implements View.OnClickListener {
         bar.addView(play, new LinearLayout.LayoutParams(Ui.dp(this, 260), Ui.dp(this, 64)));
         home.addView(bar, new LinearLayout.LayoutParams(-1, -2));
         left.setPadding(Ui.dp(this, 24), Ui.dp(this, 24), Ui.dp(this, 24), Ui.dp(this, 24));
-        left.setBackground(null);
+        left.setBackground(Ui.rounded(this, Ui.CARD, Ui.EDGE, 0));
         final View[] pages = {home, left, wrap(settingsBox), wrap(accountBox), wrap(updatesBox), wrap(modsBox)};
         final String[][] items = {
             {"\u2302", Ui.t("Главная", "Home")},
@@ -337,7 +338,7 @@ public class ProfileActivity extends Activity implements View.OnClickListener {
         for (View page : pages) content.addView(page, new FrameLayout.LayoutParams(-1, -1));
         final LinearLayout menu = new LinearLayout(this);
         menu.setOrientation(LinearLayout.VERTICAL);
-        menu.setBackground(Ui.rounded(this, Color.rgb(12, 12, 14), Ui.EDGE, 0));
+        menu.setBackground(Ui.framed(this, Ui.stone(this, false, 15), 1));
         menu.setPadding(Ui.dp(this, 6), Ui.dp(this, 6), Ui.dp(this, 6), Ui.dp(this, 6));
         final Button fold = Ui.button(this, "\u2630", false);
         menu.addView(fold, new LinearLayout.LayoutParams(-1, Ui.dp(this, 52)));
@@ -423,7 +424,13 @@ public class ProfileActivity extends Activity implements View.OnClickListener {
     private View wrap(LinearLayout box) {
         ScrollView scroll = new ScrollView(this);
         scroll.setVerticalScrollBarEnabled(false);
-        scroll.addView(box);
+        // A dark panel over the stone bricks, so the text reads.
+        box.setBackground(Ui.rounded(this, Ui.CARD, Ui.EDGE, 0));
+        FrameLayout frame = new FrameLayout(this);
+        int m = Ui.dp(this, 20);
+        frame.setPadding(m, m, m, m);
+        frame.addView(box, new FrameLayout.LayoutParams(-1, -2));
+        scroll.addView(frame);
         return scroll;
     }
 
