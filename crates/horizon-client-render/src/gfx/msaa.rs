@@ -143,7 +143,13 @@ impl Msaa {
     }
 
     /// The multisampled depth's sample 0 into the world's `depth`.
-    pub(super) fn copy_depth(&self, encoder: &mut wgpu::CommandEncoder, depth: &wgpu::TextureView) {
+    /// `timing`: its GPU time, counted with the frame's passes (VR's frame pacing reads them).
+    pub(super) fn copy_depth(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        depth: &wgpu::TextureView,
+        timing: Option<wgpu::RenderPassTimestampWrites<'_>>,
+    ) {
         let Some(t) = &self.targets else { return };
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("Horizon VR MSAA depth copy"),
@@ -153,6 +159,7 @@ impl Msaa {
                 depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(0.0), store: wgpu::StoreOp::Store }),
                 stencil_ops: None,
             }),
+            timestamp_writes: timing,
             ..Default::default()
         });
         pass.set_pipeline(&self.copy);

@@ -10733,7 +10733,11 @@ impl Renderer {
             // sample goes to the world's depth, and the rest of the world draws on over both.
             if let Some(ms) = ms {
                 drop(pass);
-                ms.copy_depth(&mut encoder, world_depth);
+                ms.copy_depth(
+                    &mut encoder,
+                    world_depth,
+                    self.own_timing.as_mut().and_then(|t| t.writes("MSAA depth copy")),
+                );
                 pass = world_pass_after_culling(
                     &mut encoder,
                     world_view,
