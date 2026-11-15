@@ -176,7 +176,6 @@ mod displace;
 pub mod lightning;
 mod lod;
 mod xr_panel;
-pub mod xr_intro;
 mod msaa;
 mod native_material;
 mod native_pack;
@@ -1084,8 +1083,6 @@ pub struct Renderer {
     xr_hud: Option<wgpu::Texture>,
     /// VR: the pass that draws the open menu's panel into the eyes (`xr_panel`).
     xr_panel: Option<xr_panel::XrPanel>,
-    /// VR's intro before the title screen (`xr_intro`).
-    xr_intro: Option<xr_intro::XrIntro>,
     /// VR's multisampled world pass (`msaa`), where `msaa_samples` > 1.
     msaa: Option<msaa::Msaa>,
     /// Whether the last world pass took MSAA (VR's log).
@@ -4889,7 +4886,6 @@ impl Renderer {
             xr_hud_skip: false,
             xr_hud: None,
             xr_panel: None,
-            xr_intro: None,
             msaa: msaa_set,
             msaa_used: false,
             in_flight: std::collections::VecDeque::new(),
@@ -11766,33 +11762,7 @@ impl Renderer {
             if self.xr_panel.as_ref().is_none_or(|p| p.format() != self.frame_format) {
                 self.xr_panel = Some(xr_panel::XrPanel::new(&self.device, self.frame_format));
             }
-            // The intro, once, in place of the title's panel until it has flown in.
-            if !frame.title {
-                xr_intro::end();
-            }
-            let intro = if frame.title { xr_intro::time() } else { None };
-            if let (Some(t), Some(image), Some(atlas)) = (intro, &self.xr_hud, &self.hud.atlas_texture) {
-                if horizon_xr::pad().is_some_and(|p| p.a || p.b || p.x || p.y || p.triggers[0] > 0.5 || p.triggers[1] > 0.5) {
-                    xr_intro::skip();
-                }
-                if self.xr_intro.as_ref().is_none_or(|p| p.format() != self.frame_format) {
-                    self.xr_intro = Some(xr_intro::XrIntro::new(&self.device, self.frame_format));
-                }
-                if let Some(pass) = &self.xr_intro {
-                    pass.draw(
-                        &self.device,
-                        &self.queue,
-                        encoder,
-                        view_target,
-                        atlas,
-                        image,
-                        views.primary().view_proj(Mat4::IDENTITY),
-                        panel,
-                        t,
-                    );
-                    horizon_xr::note_panel_in_eyes();
-                }
-            } else if let (Some(pass), Some(image)) = (&self.xr_panel, &self.xr_hud) {
+            if let (Some(pass), Some(image)) = (&self.xr_panel, &self.xr_hud) {
                 pass.draw(
                     &self.device,
                     &self.queue,

@@ -9268,14 +9268,6 @@ impl Game<'_> {
             // TitleScreen.extractRenderState, then ToastManager over it: vanilla
             // draws the toast manager on every screen, so a pack download or a
             // resource-reload failure still shows on the title (#4428).
-            // VR: the intro plays once, from the title screen's first frame.
-            horizon_client::gfx::xr_intro::request(
-                self.gui
-                    .atlas
-                    .sprites
-                    .get(horizon_client::level_loading::MOJANG_STUDIOS_LOGO)
-                    .map(|r| [r.u0, r.v0, r.u1, r.v1]),
-            );
             if let Some(title) = &self.title {
                 title.draw_with_items(
                     &self.gui.atlas,
