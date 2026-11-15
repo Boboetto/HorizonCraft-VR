@@ -238,13 +238,19 @@ public class ProfileActivity extends Activity implements View.OnClickListener {
                 12, Ui.MUTED, false));
         final Button paceButton = Ui.button(this, "", false);
         final Button msaaButton = Ui.button(this, "", false);
+        final Button scaleButton = Ui.button(this, "", false);
+        final Button boostButton = Ui.button(this, "", false);
         final boolean[] pace = {vrSetting("pace", 1) != 0};
         msaaOn = vrSetting("msaa", 1) != 0;
+        boostOn = vrSetting("boost", 1) != 0;
+        vrScale = vrSetting("scale", 0);
         // One mode, Quality: a sharp image with the chunks it can draw smoothly. Applied once
         // (the game's options can still be changed in the game afterwards).
         // With MSAA the edges are smooth at 1.0x: 1.4x on top of it was four times the samples
         // of 1.0x, and the game fell to a third of 90 Hz.
-        if (!"quality".equals(vrMode()) || Math.abs(vrSetting("scale", 0) - qualityScale()) > 0.05f) {
+        // (`preset`: the defaults' version; an older file takes the new ones once.)
+        if (!"quality".equals(vrMode()) || vrSetting("preset", 0) < 2) {
+            vrScale = qualityScale();
             applyMode("quality", pace[0]);
         }
         final TextView summary = Ui.text(this, "", 13, Ui.TEXT, true);
@@ -252,15 +258,17 @@ public class ProfileActivity extends Activity implements View.OnClickListener {
             public void run() {
                 paceButton.setText(Ui.t("Ровные кадры: ", "Frame pacing: ") + (pace[0] ? "Auto" : "Off"));
                 msaaButton.setText("Antialiasing MSAA: " + (msaaOn ? "4x" : "Off"));
+                scaleButton.setText(String.format(java.util.Locale.ROOT, Ui.t("Разрешение: %.2fx", "Resolution: %.2fx"), vrScale));
+                boostButton.setText(Ui.t("Ускорение: ", "Performance boost: ") + (boostOn ? "On" : "Off"));
                 summary.setText(String.format(java.util.Locale.ROOT,
-                        "Quality · %.1fx · 90 Hz · 6 chunks · anisotropic 8x%s", qualityScale(), msaaOn ? " · MSAA 4x" : ""));
+                        "Quality · %.2fx · 90 Hz · 6 chunks · anisotropic 8x%s", vrScale, msaaOn ? " · MSAA 4x" : ""));
             }
         };
         showVr.run();
         paceButton.setOnClickListener(new View.OnClickListener() {
             public void onClick(View v) {
                 pace[0] = !pace[0];
-                saveVr(qualityScale(), 90, pace[0]);
+                saveVr(vrScale, 90, pace[0]);
                 showVr.run();
             }
         });
@@ -268,10 +276,44 @@ public class ProfileActivity extends Activity implements View.OnClickListener {
         msaaButton.setOnClickListener(new View.OnClickListener() {
             public void onClick(View v) {
                 msaaOn = !msaaOn;
-                saveVr(qualityScale(), 90, pace[0]);
+                vrScale = qualityScale();
+                saveVr(vrScale, 90, pace[0]);
                 showVr.run();
             }
         });
+        scaleButton.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                // The next step up, then round again: sharper costs frames.
+                float[] steps = msaaOn ? new float[] {1.0f, 1.15f, 1.3f} : new float[] {1.2f, 1.4f};
+                float next = steps[0];
+                for (float step : steps) {
+                    if (step > vrScale + 0.01f) {
+                        next = step;
+                        break;
+                    }
+                }
+                vrScale = next;
+                saveVr(vrScale, 90, pace[0]);
+                showVr.run();
+            }
+        });
+        boostButton.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                boostOn = !boostOn;
+                saveVr(vrScale, 90, pace[0]);
+                showVr.run();
+            }
+        });
+        card.addView(scaleButton, Ui.gap(this, 6));
+        card.addView(Ui.text(this, Ui.t(
+                "Разрешение: выше — резче, но меньше кадров.",
+                "Resolution: higher is sharper, but draws fewer frames. Try a step up or down to find what your eyes prefer."),
+                12, Ui.MUTED, false));
+        card.addView(boostButton, Ui.gap(this, 6));
+        card.addView(Ui.text(this, Ui.t(
+                "Ускорение: процессор и графика шлема на максимуме. Больше кадров, шлем теплее, батарея садится быстрее.",
+                "Performance boost: the headset's CPU and GPU at their highest clocks. More frames; the headset runs warmer and the battery drains faster."),
+                12, Ui.MUTED, false));
         card.addView(paceButton, Ui.gap(this, 6));
         card.addView(msaaButton, Ui.gap(this, 6));
         card.addView(Ui.text(this, Ui.t(
@@ -513,12 +555,12 @@ public class ProfileActivity extends Activity implements View.OnClickListener {
         if (mode.equals("performance")) {
             scale = 0.8f; hz = 72; distance = 12; simulation = 8; clouds = "\"false\""; particles = "1"; biome = 1; entities = "1.0";
         } else if (mode.equals("quality")) {
-            scale = qualityScale(); hz = 90; distance = 6; simulation = 6; clouds = "\"true\""; particles = "0"; biome = 3; entities = "1.0";
+            scale = vrScale; hz = 90; distance = 6; simulation = 6; clouds = "\"true\""; particles = "0"; biome = 3; entities = "1.0";
         } else {
             scale = 1.0f; hz = 72; distance = 9; simulation = 8; clouds = "\"fast\""; particles = "0"; biome = 2; entities = "1.0";
         }
         try (java.io.FileWriter w = new java.io.FileWriter(vrFile())) {
-            w.write(String.format(java.util.Locale.ROOT, "mode=%s\nscale=%.1f\nhz=%d\npace=%d\nmsaa=%d\n", mode, scale, hz, pace ? 1 : 0, msaaOn ? 1 : 0));
+            w.write(String.format(java.util.Locale.ROOT, "mode=%s\nscale=%.2f\nhz=%d\npace=%d\nmsaa=%d\nboost=%d\npreset=2\n", mode, scale, hz, pace ? 1 : 0, msaaOn ? 1 : 0, boostOn ? 1 : 0));
         } catch (Exception ignored) {
         }
         java.util.LinkedHashMap<String, String> set = new java.util.LinkedHashMap<>();
@@ -557,14 +599,19 @@ public class ProfileActivity extends Activity implements View.OnClickListener {
     /** VR's MSAA (horizon-vr.txt `msaa=`), on by default. */
     private boolean msaaOn = true;
 
-    /** Quality's resolution: 1.0x with MSAA, 1.4x without. */
+    /** The headset's CPU and GPU at their highest clocks (horizon-vr.txt `boost=`). */
+    private boolean boostOn = true;
+    /** The eyes' resolution (horizon-vr.txt `scale=`). */
+    private float vrScale = 1.15f;
+
+    /** Quality's resolution to start from: 1.15x with MSAA, 1.4x without. */
     private float qualityScale() {
-        return msaaOn ? 1.0f : 1.4f;
+        return msaaOn ? 1.15f : 1.4f;
     }
 
     private void saveVr(float scale, int hz, boolean pace) {
         try (java.io.FileWriter w = new java.io.FileWriter(vrFile())) {
-            w.write(String.format(java.util.Locale.ROOT, "mode=quality\nscale=%.1f\nhz=%d\npace=%d\nmsaa=%d\n", scale, hz, pace ? 1 : 0, msaaOn ? 1 : 0));
+            w.write(String.format(java.util.Locale.ROOT, "mode=quality\nscale=%.2f\nhz=%d\npace=%d\nmsaa=%d\nboost=%d\npreset=2\n", scale, hz, pace ? 1 : 0, msaaOn ? 1 : 0, boostOn ? 1 : 0));
         } catch (Exception ignored) {
         }
     }

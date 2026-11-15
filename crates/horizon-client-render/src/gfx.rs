@@ -6820,9 +6820,10 @@ impl Renderer {
         let taa = taa && self.world_post.supports_taa();
         self.world_post.scale = scale.clamp(0.25, 2.0);
         // VR: FXAA always, over each eye: the edges of far blocks (snow layers, steps) are
-        // thinner than a pixel and shimmer as the head moves.
+        // thinner than a pixel and shimmer as the head moves. Not with MSAA, which smooths
+        // those edges itself: FXAA over it only softened the textures.
         #[cfg(target_os = "android")]
-        let antialias = antialias || horizon_xr::active();
+        let antialias = antialias || (horizon_xr::active() && msaa_samples() == 1);
         self.world_post.antialias = antialias && !taa;
         self.world_post.taa = taa;
         self.world_post.upscale = if taa { upscale.clamp(1.0, 4.0) } else { 1.0 };
@@ -9807,7 +9808,9 @@ impl Renderer {
         let scaled = self.world_post.prepare(
             &self.device,
             [self.config.width, self.config.height],
-            pack_reads_world || fg,
+            // VR keeps the world's own target with or without FXAA: the hands and the menu's
+            // panel draw after it, over the eye's image.
+            pack_reads_world || fg || self.xr_view.is_some(),
         );
         let (world_view, world_depth) = match &scaled {
             Some((color, depth)) => (color, depth),
