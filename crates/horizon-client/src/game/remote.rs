@@ -7,6 +7,8 @@
 //! client predicts its own movement; the server stays authoritative for
 //! everything else.
 use super::remote_chunks::{ChunkDecoder, ChunkFormat, Next};
+/// Until when a break started by a VR blow is kept between blows (`Game::vr_mining_held`).
+pub(super) static VR_MINING_HOLD: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
 use super::{Dim, Game, Mining, Screen};
 use horizon_client::actions::Action;
 use horizon_client::first_person::{Hand, SwingAnimation};
@@ -9141,6 +9143,16 @@ impl Game<'_> {
         Ok(())
     }
 
+    /// VR: a block struck by hand keeps its crack between the blows (`VR_MINING_HOLD`): the
+    /// break is not aborted when the blow's click ends, so the server's clock runs on and
+    /// the next blow on that block goes on from where this one left it.
+    fn vr_mining_held() -> bool {
+        VR_MINING_HOLD
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .is_some_and(|until| std::time::Instant::now() < until)
+    }
+
     pub(super) fn request_remote_mining_stop(&mut self) {
         if let Some(r) = self.remote.as_mut() {
             r.stop_mining = true;
@@ -9166,7 +9178,7 @@ impl Game<'_> {
         // chosen since the last tick (the wheel, the last tick's number keys, the
         // server's SetHeldSlot) goes out before anything else of this tick.
         self.remote_send_carried();
-        if stop || !ready {
+        if (stop && !Self::vr_mining_held()) || !ready {
             self.stop_remote_mining();
         }
         if !ready {
@@ -9450,7 +9462,7 @@ impl Game<'_> {
             // `stopDestroyBlock` returns at once for a break that is not running: a pick that
             // missed once a break stopped ends nothing, so the dig's accumulated progress stays
             // and goes on growing on the jumps that follow (#4124).
-            if self.stop_remote_mining() {
+            if !Self::vr_mining_held() && self.stop_remote_mining() {
                 self.mining = None;
             }
         }

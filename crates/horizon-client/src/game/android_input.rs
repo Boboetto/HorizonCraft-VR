@@ -215,6 +215,9 @@ static CONTAINER_SCREEN: std::sync::atomic::AtomicBool = std::sync::atomic::Atom
 /// VR: where the window's player stands and where their head looks (yaw, pitch), for what
 /// asks where a player looks rather than aims (an enderman's stare): the game's own look
 /// goes along the right hand. Read on the server thread too (`Game::player_view`).
+/// VR: the right hand's stroke over the last 80 ms: where its tip was then (in the world,
+/// as the player stands now) and the way it went since (a unit vector).
+static XR_STROKE: Mutex<Option<([f64; 3], [f64; 3])>> = Mutex::new(None);
 pub(super) static XR_HEAD: Mutex<Option<([f64; 3], (f32, f32))>> = Mutex::new(None);
 static CHAT_BUTTON: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 /// VR: Y closed an inventory or container (`xr_buttons`): it opens nothing until let go.
@@ -467,7 +470,8 @@ impl super::Game<'_> {
     /// from the hand to it for the blow's test.
     fn xr_right_tip(&self) -> Option<([f64; 3], f64)> {
         use std::time::Instant;
-        static LAST: Mutex<Option<(Instant, [f32; 3])>> = Mutex::new(None);
+        // The tip over the last 80 ms: when, where in the room, and where from the eyes.
+        static TRAIL: Mutex<Vec<(Instant, [f32; 3], [f64; 3])>> = Mutex::new(Vec::new());
         let now = Instant::now();
         let eye = self.eye_position()?;
         let hand = horizon_xr::last_hands()?[horizon_xr::Hand::RightAim as usize]?;
@@ -481,12 +485,26 @@ impl super::Game<'_> {
         let along = hand.rotation * glam::Vec3::NEG_Z;
         let tip = [0, 1, 2].map(|i| base[i] + f64::from(along[i]) * reach);
         *XR_BLADE.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some((base, tip));
-        let mut last = LAST.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        let speed = last.map_or(0.0, |(t, p): (Instant, [f32; 3])| {
-            let dt = now.duration_since(t).as_secs_f64().max(1e-3);
-            (0..3).map(|i| f64::from(room[i] - p[i]).powi(2)).sum::<f64>().sqrt() / dt
-        });
-        *last = Some((now, room));
+        // The speed is the way made over that time, not between two frames: the tracking's
+        // jitter and a wobble of the wrist make no way, a blow does.
+        let mut trail = TRAIL.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        trail.retain(|(t, _, _)| now.duration_since(*t).as_millis() <= 80);
+        let from_eye = [0, 1, 2].map(|i| tip[i] - eye[i]);
+        let mut speed = 0.0;
+        let mut stroke = None;
+        if let Some(&(t, p, start)) = trail.first() {
+            let dt = now.duration_since(t).as_secs_f64();
+            if dt >= 0.03 {
+                speed = (0..3).map(|i| f64::from(room[i] - p[i]).powi(2)).sum::<f64>().sqrt() / dt;
+                let way = [0, 1, 2].map(|i| from_eye[i] - start[i]);
+                let length = way.iter().map(|v| v * v).sum::<f64>().sqrt();
+                if length > 1e-3 {
+                    stroke = Some(([0, 1, 2].map(|i| eye[i] + start[i]), way.map(|v| v / length)));
+                }
+            }
+        }
+        trail.push((now, room, from_eye));
+        *XR_STROKE.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = stroke;
         Some((tip, speed))
     }
     /// VR: a swing of the right controller (at least 2.5 m/s in the room) whose tip meets
@@ -586,8 +604,21 @@ impl super::Game<'_> {
             })
             .find(|&b| solid(b))
             .unwrap_or_else(|| blade_tip.map(|v| v.floor() as i32));
-        let struck = !edible && speed >= 2.0 && solid(block);
+        // A blow meant for the block, as Vivecraft's and QuestCraft's: the tip came from open
+        // air, fast, and towards it. A hand carried along a wall while walking, a blade
+        // already in the blocks or a turn of the wrist strikes nothing.
+        let stroke = *XR_STROKE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let meant = stroke.is_some_and(|(from, way)| {
+            let to = [0, 1, 2].map(|i| f64::from(block[i]) + 0.5 - from[i]);
+            let far = to.iter().map(|v| v * v).sum::<f64>().sqrt().max(1e-3);
+            let towards = (0..3).map(|i| way[i] * to[i]).sum::<f64>() / far;
+            !solid(from.map(|v| v.floor() as i32)) && towards > 0.45
+        });
+        let struck = !edible && speed >= 1.8 && meant && solid(block);
         if struck {
+            // The crack stays five seconds for the next blow (`Game::vr_mining_held`).
+            *super::remote::VR_MINING_HOLD.lock().unwrap_or_else(std::sync::PoisonError::into_inner) =
+                Some(now + Duration::from_secs(5));
             if mining.is_some_and(|(b, _)| b != block) {
                 s.mouse.push(MouseInput::Button(0, false));
             }
