@@ -29,8 +29,9 @@ It plays Minecraft: Java Edition 26.3 in VR, with motion controls in the spirit 
 - A crosshair for each hand, lying on the face of the block it aims at
 - The left trigger uses and places along the left hand while the right trigger attacks along the right one
 - Gestures: swing a sword at a mob, strike blocks with a tool to mine, bring food to the mouth to eat,
-  breaststroke to swim, or sprint in water to swim where you look, two-handed bow, throw potions, snowballs, eggs and
-  ender pearls with a move of the hand
+  breaststroke to swim, or sprint in water to swim where you look, two-handed bow and crossbow, throw potions, snowballs, eggs,
+  ender pearls and tridents with a move of the hand, raise a shield to block, flick a fishing rod, pull yourself up
+  ladders, row a boat
 - Menus on a panel in the room with a pointer for each hand, 360° title panorama
 - Walk where you look with the left stick, turn with the right one
 - A Quality setup tuned for the Quest 3 (MSAA 4x antialiasing, 90 Hz, 6 chunks, anisotropic filtering), with a resolution step and a performance boost in the launcher, plus frame pacing against micro-stutter
