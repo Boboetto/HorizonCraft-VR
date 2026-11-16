@@ -212,6 +212,10 @@ pub(super) fn take_used() -> (bool, bool) {
 /// VR: an inventory or container screen is open: B quick-moves there instead of going back.
 static CONTAINER_SCREEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 /// VR: B opens the chat in play and closes it again (`xr_buttons`), it is no pad button there.
+/// VR: where the window's player stands and where their head looks (yaw, pitch), for what
+/// asks where a player looks rather than aims (an enderman's stare): the game's own look
+/// goes along the right hand. Read on the server thread too (`Game::player_view`).
+pub(super) static XR_HEAD: Mutex<Option<([f64; 3], (f32, f32))>> = Mutex::new(None);
 static CHAT_BUTTON: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 /// VR: Y closed an inventory or container (`xr_buttons`): it opens nothing until let go.
 static Y_LATCH: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -712,6 +716,11 @@ impl super::Game<'_> {
     }
     pub(super) fn xr_look(&mut self) {
         horizon_xr::set_menu(self.title.is_some() || self.screen != super::Screen::Playing);
+        *XR_HEAD.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = self
+            .player
+            .as_ref()
+            .map(|p| [p.position.x, p.position.y, p.position.z])
+            .zip(horizon_xr::head_look().map(|(yaw, pitch, _)| (yaw, pitch)));
         self.xr_swim();
         // A swing at a mob first, else the hand's own actions (they track every frame).
         let bow = self.xr_bow();
@@ -1073,7 +1082,13 @@ impl super::Game<'_> {
                     phase: TouchPhase::Moved,
                 },
             };
+            // VR's gestures click for the hands (a swing, a strike, food at the mouth): no
+            // mouse took over from the controllers, whose sticks and buttons stay held.
+            let gesture = horizon_xr::active() && !in_menu && matches!(input, MouseInput::Button(..));
+            let was = self.pad.menu.synthetic;
+            self.pad.menu.synthetic = gesture || was;
             self.handle_window_event(event_loop, window_id, event, super::input_trace::InputOrigin::User);
+            self.pad.menu.synthetic = was;
         }
         if SHIFT_ONCE.swap(false, std::sync::atomic::Ordering::Relaxed) {
             self.modifiers = winit::keyboard::ModifiersState::empty();

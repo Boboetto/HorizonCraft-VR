@@ -387,6 +387,17 @@ impl Game<'_> {
                 p.position.z + w,
             ),
         );
+        // VR: the window's player (the one standing where it stands) looks with the head.
+        #[cfg(target_os = "android")]
+        let (yaw, pitch) = super::android_input::XR_HEAD
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .filter(|(at, _)| {
+                (at[0] - p.position.x).abs() < 2.0 && (at[1] - p.position.y).abs() < 2.0 && (at[2] - p.position.z).abs() < 2.0
+            })
+            .map_or((self.yaw, self.pitch), |(_, look)| look);
+        #[cfg(not(target_os = "android"))]
+        let (yaw, pitch) = (self.yaw, self.pitch);
         Some(PlayerView {
             position: p.position,
             bounds,
@@ -400,7 +411,7 @@ impl Game<'_> {
             creative: self.creative || self.spectator(),
             sneaking: self.keys.held(Action::Sneak),
             swimming: p.swimming,
-            look: view_vector(self.yaw, self.pitch),
+            look: view_vector(yaw, pitch),
             main_hand: self.held().map(|s| s.item.clone()),
             off_hand: self.offhand.as_ref().map(|s| s.item.clone()),
             head: self.armor[0].as_ref().map(|s| s.item.clone()),
