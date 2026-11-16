@@ -219,6 +219,8 @@ static CONTAINER_SCREEN: std::sync::atomic::AtomicBool = std::sync::atomic::Atom
 /// as the player stands now) and the way it went since (a unit vector).
 static XR_STROKE: Mutex<Option<([f64; 3], [f64; 3])>> = Mutex::new(None);
 pub(super) static XR_HEAD: Mutex<Option<([f64; 3], (f32, f32))>> = Mutex::new(None);
+/// VR: a throw by hand is on its way (`xr_throw`): its use goes where the hand went.
+static THROWING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 static CHAT_BUTTON: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 /// VR: Y closed an inventory or container (`xr_buttons`): it opens nothing until let go.
 static Y_LATCH: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -507,6 +509,66 @@ impl super::Game<'_> {
         *XR_STROKE.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = stroke;
         Some((tip, speed))
     }
+    /// VR: throwing by hand. With something thrown in the right hand (a splash or lingering
+    /// potion, a snowball, an egg, an ender pearl, a bottle o' enchanting, a wind charge), a
+    /// fast move of the hand away from the head throws it the way the hand went. Returns
+    /// where to look while the throw's click lands.
+    fn xr_throw(&mut self, hand: Option<([f64; 3], f64)>) -> Option<[f64; 3]> {
+        use std::sync::atomic::Ordering;
+        use std::time::{Duration, Instant};
+        static TARGET: Mutex<Option<(Instant, [f64; 3])>> = Mutex::new(None);
+        static COOLDOWN: Mutex<Option<Instant>> = Mutex::new(None);
+        let now = Instant::now();
+        let held = *TARGET.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some((until, at)) = held
+            && now < until
+        {
+            return Some(at);
+        }
+        THROWING.store(false, Ordering::Relaxed);
+        if self.screen != super::Screen::Playing || self.title.is_some() {
+            return None;
+        }
+        let (_, speed) = hand?;
+        let mut cooldown = COOLDOWN.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if speed < 2.5 || cooldown.is_some_and(|t| now < t) {
+            return None;
+        }
+        let thrown = self.visible_hand_items()[0].as_ref().is_some_and(|stack| {
+            matches!(
+                &*stack.item,
+                "minecraft:splash_potion"
+                    | "minecraft:lingering_potion"
+                    | "minecraft:snowball"
+                    | "minecraft:egg"
+                    | "minecraft:blue_egg"
+                    | "minecraft:brown_egg"
+                    | "minecraft:ender_pearl"
+                    | "minecraft:experience_bottle"
+                    | "minecraft:wind_charge"
+            )
+        });
+        if !thrown {
+            return None;
+        }
+        let eye = self.eye_position()?;
+        let (from, way) = (*XR_STROKE.lock().unwrap_or_else(std::sync::PoisonError::into_inner))?;
+        // Away from the head, not a hand coming back or dropping to the side.
+        let out = [0, 1, 2].map(|i| from[i] - eye[i]);
+        let far = out.iter().map(|v| v * v).sum::<f64>().sqrt().max(1e-3);
+        if (0..3).map(|i| way[i] * out[i]).sum::<f64>() / far < 0.3 {
+            return None;
+        }
+        let target = [0, 1, 2].map(|i| eye[i] + way[i] * 10.0);
+        *cooldown = Some(now + Duration::from_millis(600));
+        *TARGET.lock().unwrap_or_else(std::sync::PoisonError::into_inner) =
+            Some((now + Duration::from_millis(150), target));
+        THROWING.store(true, Ordering::Relaxed);
+        let mut s = shared();
+        s.mouse.push(MouseInput::Button(1, true));
+        s.mouse.push(MouseInput::Button(1, false));
+        Some(target)
+    }
     /// VR: a swing of the right controller (at least 2.5 m/s in the room) whose tip meets
     /// a mob hits it, as a click on it would: the player turns to it for a moment and the
     /// attack goes the usual way (reach, cooldown, damage). Returns where to look.
@@ -759,7 +821,7 @@ impl super::Game<'_> {
         let (swing, hand) = if bow.is_some() || BOW_HELD.load(std::sync::atomic::Ordering::Relaxed) {
             (None, None)
         } else {
-            (self.xr_swing(tip), self.xr_hand_actions(tip))
+            (self.xr_throw(tip).or_else(|| self.xr_swing(tip)), self.xr_hand_actions(tip))
         };
         GESTURE.store(swing.is_some() || hand.is_some(), std::sync::atomic::Ordering::Relaxed);
         if let Some(at) = bow.or(swing).or(hand)
@@ -907,7 +969,9 @@ impl super::Game<'_> {
     /// aiming and attacking meanwhile. Food at the mouth is eaten wherever the hand points.
     pub(super) fn xr_left_use(&mut self, use_now: impl FnOnce(&mut Self)) {
         let angles = horizon_xr::hand_angles(true)
-            .filter(|_| !EATING.load(std::sync::atomic::Ordering::Relaxed));
+            .filter(|_| {
+                !EATING.load(std::sync::atomic::Ordering::Relaxed) && !THROWING.load(std::sync::atomic::Ordering::Relaxed)
+            });
         let Some((yaw, pitch)) = angles else {
             use_now(self);
             return;

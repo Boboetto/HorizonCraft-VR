@@ -308,6 +308,11 @@ impl Post {
         [j[0] * size[0] as f32 * 0.5, -j[1] * size[1] as f32 * 0.5]
     }
 
+    /// The world's depth when its target is the window's size (VR's arms test against it).
+    pub fn depth_at(&self, window: [u32; 2]) -> Option<wgpu::TextureView> {
+        self.target.as_ref().filter(|t| t.size == window).map(|t| t.depth.clone())
+    }
+
     /// The world's colour and depth targets this frame, or `None` to draw
     /// it straight to the screen.
     /// `always`: a target even at scale 1 without anti-aliasing (a shader pack reads it).

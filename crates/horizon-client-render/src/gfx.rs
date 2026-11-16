@@ -9758,7 +9758,9 @@ impl Renderer {
             || (taa && self.world_post.taa)
             || oit_on
             || native_render::render_needs().world_depth
-            || fg;
+            || fg
+            // VR's arms and held items are behind what the world put nearer (`draw_overlay`).
+            || self.xr_view.is_some();
         // The pack's program reads the vertices this frame's draws bind.
         let pack_draws_terrain = pack_terrain && flat_frame == self.pack_terrain_flat;
         // The shadow camera's lists, drawn by the pack's shadow programs.
@@ -11779,6 +11781,12 @@ impl Renderer {
             }
         }
         if overlay.hand_quads > 0 {
+            // VR: the arms are in the world, on the controllers, so the world's depth hides
+            // what of them is behind a block (flat, the hand has its own depth, cleared).
+            let behind_world = self
+                .xr_view
+                .filter(|_| overlay.real && self.hdr.is_none() && !frame.title)
+                .and_then(|_| self.world_post.depth_at([self.config.width, self.config.height]));
             let attachments = [Some(wgpu::RenderPassColorAttachment {
                 view: view_target,
                 resolve_target: None,
@@ -11793,9 +11801,9 @@ impl Renderer {
                 timestamp_writes: timing.as_mut().and_then(|t| t.writes("Hand")),
                 color_attachments: &attachments,
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &self.depth,
+                    view: behind_world.as_ref().unwrap_or(&self.depth),
                     depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(0.0),
+                        load: if behind_world.is_some() { wgpu::LoadOp::Load } else { wgpu::LoadOp::Clear(0.0) },
                         // HDR output's hand marks test against it (below).
                         store: if self.hdr.is_some() {
                             wgpu::StoreOp::Store
