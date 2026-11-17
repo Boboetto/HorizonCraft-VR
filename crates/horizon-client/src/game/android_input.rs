@@ -660,10 +660,9 @@ impl super::Game<'_> {
         s.mouse.push(MouseInput::Button(0, false));
         Some(target)
     }
-    /// VR: what the right hand does. A blow into a block (the tip entering it at 2 m/s or
-    /// more in the room) mines it, as holding the attack on it does, for a moment after
-    /// each blow: keep striking, in any direction, to break it. Resting or moving slowly
-    /// does nothing. Food or a potion held near the mouth is eaten or drunk (use held).
+    /// VR: what the right hand does. A blow into a block (the tip entering it from the air,
+    /// towards it, at 1.8 m/s or more in the room) digs it a few ticks' worth, as Vivecraft's
+    /// roomscale mining: keep striking to break it. Resting or moving slowly does nothing. Food or a potion held near the mouth is eaten or drunk (use held).
     /// Returns where to look while mining.
     fn xr_hand_actions(&mut self, hand: Option<([f64; 3], f64)>) -> Option<[f64; 3]> {
         use std::time::{Duration, Instant};
@@ -674,9 +673,7 @@ impl super::Game<'_> {
         let mut s = shared();
         let mut mining = MINING.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let Some(((tip, speed), eye)) = place else {
-            if mining.take().is_some() {
-                s.mouse.push(MouseInput::Button(0, false));
-            }
+            mining.take();
             if EATING.swap(false, std::sync::atomic::Ordering::Relaxed) {
                 s.mouse.push(MouseInput::Button(1, false));
             }
@@ -724,32 +721,32 @@ impl super::Game<'_> {
             let towards = (0..3).map(|i| way[i] * to[i]).sum::<f64>() / far;
             !solid(from.map(|v| v.floor() as i32)) && towards > 0.45
         });
-        let struck = !edible && speed >= 1.8 && meant && solid(block);
+        // One blow per entry: the blade has to come out of the blocks before it strikes again.
+        static INSIDE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        let inside = solid(block);
+        let was_inside = INSIDE.swap(inside, std::sync::atomic::Ordering::Relaxed);
+        let struck = !edible && !was_inside && speed >= 1.8 && meant && inside;
         if struck {
-            // The crack stays five seconds for the next blow (`Game::vr_mining_held`).
+            // As Vivecraft's roomscale mining: a blow is three ticks of digging, up to four more
+            // for a harder one. The crack stays still between blows, without sounds, for ten
+            // seconds (`Game::vr_mining_held`).
+            let ticks = 3 + (speed - 1.8).clamp(0.0, 4.0) as u32;
             *super::remote::VR_MINING_HOLD.lock().unwrap_or_else(std::sync::PoisonError::into_inner) =
-                Some(now + Duration::from_secs(5));
-            if mining.is_some_and(|(b, _)| b != block) {
-                s.mouse.push(MouseInput::Button(0, false));
-            }
-            if mining.is_none_or(|(b, _)| b != block) {
-                s.mouse.push(MouseInput::Button(0, true));
-            }
-            *mining = Some((block, now + Duration::from_millis(350)));
+                Some(now + Duration::from_secs(10));
+            super::remote::VR_BLOWS.lock().unwrap_or_else(std::sync::PoisonError::into_inner).push(ticks);
+            *mining = Some((block, now + Duration::from_millis(200)));
         }
         match *mining {
             Some((block, until)) if now < until => Some(block.map(|v| f64::from(v) + 0.5)),
             Some(_) => {
                 *mining = None;
-                s.mouse.push(MouseInput::Button(0, false));
                 None
             }
             None => None,
         }
     }
     /// VR: what the arms do without a click. A shield raised in front blocks (use held while
-    /// it is up); on a ladder or a vine a hand pulling down lifts the player; in a boat the
-    /// hands rowing backwards paddle (both go ahead, one alone turns away from its side).
+    /// it is up); in a boat the hands rowing backwards paddle (both go ahead, one alone turns away from its side).
     fn xr_body(&mut self) {
         use horizon_xr::Hand;
         use std::sync::atomic::{AtomicBool, Ordering};
@@ -815,17 +812,6 @@ impl super::Game<'_> {
                 rowing.1 = true;
             } else if std::mem::take(&mut rowing.1) {
                 self.pad.injected.left = [0.0; 2];
-            }
-        }
-        // Climbing: a metre a second pulled down is a block a second up, three at most.
-        if playing
-            && self.riding.is_none()
-            && let Some(p) = self.player.as_mut()
-            && p.on_climbable
-        {
-            let pull = speeds.iter().flatten().map(|v| -v.y).fold(0.0f32, f32::max);
-            if pull > 0.3 {
-                p.velocity.y = p.velocity.y.max(f64::from(pull.min(3.0)) * 0.05);
             }
         }
     }
