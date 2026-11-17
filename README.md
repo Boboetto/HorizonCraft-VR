@@ -30,7 +30,9 @@ It plays Minecraft: Java Edition 26.3 in VR, with motion controls in the spirit 
 - The left trigger uses and places along the left hand while the right trigger attacks along the right one
 - Gestures modelled on Vivecraft's (LGPLv3) rules: swing a weapon or tool at a mob, strike blocks to mine them (each blow
   digs a little, the crack waits for the next one), bring food to the mouth to eat or tip a drink, draw the stroke
-  of a swim towards you, nock and draw a bow with both hands, move the arms to row a boat
+  of a swim towards you, nock and draw a bow with both hands, move the arms to row a boat; and our own, measured the same
+  way: throw potions, snowballs, eggs and ender pearls with a stroke of the hand, raise a trident beside the head and
+  throw it, flick a fishing rod out and back, hold a shield up in front, cock a crossbow with the other hand
 - Menus on a panel in the room with a pointer for each hand, 360° title panorama
 - Walk where you look with the left stick, turn with the right one
 - A Quality setup tuned for the Quest 3 (MSAA 4x antialiasing, 90 Hz, 6 chunks, anisotropic filtering), with a resolution step and a performance boost in the launcher, plus frame pacing against micro-stutter

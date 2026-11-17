@@ -274,7 +274,21 @@ struct XrSwing {
     /// Metres a second in the room, 30 cm out along the controller, over a third of a second.
     speed: f32,
     sword: bool,
+    /// The way that point went over that time, in the world's axes (a unit vector), if it moved.
+    way: Option<[f64; 3]>,
 }
+
+/// What a throw by hand does (`Game::xr_throw`).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Thrown {
+    Item,
+    Rod,
+    Trident,
+}
+
+/// VR: a throw by hand is charging or on its way (`xr_throw`): the left trigger's use stays
+/// with the game's own aim, and the swing and mining wait.
+static THROWING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// VR: food or a potion is held at the mouth (the use button held by the gesture).
 static EATING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -510,6 +524,7 @@ impl super::Game<'_> {
     fn xr_right_swing(&self) -> Option<XrSwing> {
         use std::time::Instant;
         static TIP: Mutex<Samples> = Mutex::new(Vec::new());
+        static WAY: Mutex<Samples> = Mutex::new(Vec::new());
         let now = Instant::now();
         let eye = self.eye_position()?;
         let pose = horizon_xr::last_hands()?[horizon_xr::Hand::RightAim as usize]?;
@@ -520,6 +535,18 @@ impl super::Game<'_> {
         let along = pose.rotation * glam::Vec3::NEG_Z;
         let hand = [0, 1, 2].map(|i| eye[i] + f64::from(pose.offset[i]));
         let dir = [0, 1, 2].map(|i| f64::from(along[i]));
+        let mut ways = WAY.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        sample(&mut ways, now, pose.offset + along * 0.3);
+        let recent: Vec<_> = ways.iter().filter(|(t, _)| now.duration_since(*t).as_secs_f32() <= 0.33).collect();
+        let way = recent
+            .first()
+            .zip(recent.last())
+            .map(|(a, b)| b.1 - a.1)
+            .filter(|w| w.length() > 0.05)
+            .map(|w| {
+                let w = w.normalize();
+                [f64::from(w.x), f64::from(w.y), f64::from(w.z)]
+            });
         let item = self.visible_hand_items()[0].clone();
         let name = item.as_ref().map_or("", |s| &*s.item);
         let sword = name.ends_with("_sword") || name.ends_with("_spear") || name == "minecraft:trident";
@@ -534,7 +561,129 @@ impl super::Game<'_> {
         } else {
             (0.0, 0.3)
         };
-        Some(XrSwing { hand, dir, weapon, entity_reach: weapon + entity_add, speed, sword })
+        Some(XrSwing { hand, dir, weapon, entity_reach: weapon + entity_add, speed, sword, way })
+    }
+    /// VR: our own gestures for what Vivecraft has none for, measured the same way as its
+    /// swing (`XrSwing`: over 2.5 m/s, the hand's own speed in the room). One per stroke: the
+    /// hand has to slow down again (under 1.5 m/s) before the next.
+    /// - Something thrown (a splash or lingering potion, a snowball, an egg, an ender pearl, a
+    ///   bottle o' enchanting, a wind charge): a stroke away from the head throws it the way
+    ///   the hand went.
+    /// - A fishing rod: a stroke away from the head casts it that way; a stroke back towards
+    ///   the head (or up) reels it in.
+    /// - A trident: the hand raised beside the head, at its height or above, holds it back
+    ///   (charging); a stroke away from the head throws it that way. Lowered under the chest
+    ///   it is let go (the game throws it along the hand if it charged long enough).
+    /// Returns where to look while the throw's click lands.
+    fn xr_throw(&mut self, swing: Option<XrSwing>) -> Option<[f64; 3]> {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::time::{Duration, Instant};
+        static TARGET: Mutex<Option<(Instant, [f64; 3])>> = Mutex::new(None);
+        static ARMED: AtomicBool = AtomicBool::new(true);
+        static TRIDENT: AtomicBool = AtomicBool::new(false);
+        static CAST: Mutex<Option<String>> = Mutex::new(None);
+        let now = Instant::now();
+        let held = *TARGET.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some((until, at)) = held
+            && now < until
+        {
+            THROWING.store(true, Ordering::Relaxed);
+            return Some(at);
+        }
+        THROWING.store(TRIDENT.load(Ordering::Relaxed), Ordering::Relaxed);
+        let playing = self.screen == super::Screen::Playing && self.title.is_none();
+        let name = self.visible_hand_items()[0].as_ref().map(|s| s.item.to_string()).filter(|_| playing);
+        let kind = Self::xr_thrown_kind(name.as_deref());
+        if TRIDENT.load(Ordering::Relaxed) && kind != Some(Thrown::Trident) {
+            TRIDENT.store(false, Ordering::Relaxed);
+            shared().mouse.push(MouseInput::Button(1, false));
+        }
+        // The rod's line is out until a reel, or another item.
+        let mut cast = CAST.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if kind != Some(Thrown::Rod) {
+            *cast = None;
+        }
+        let (kind, swing, eye) = (kind?, swing?, self.eye_position()?);
+        if swing.speed < 1.5 {
+            ARMED.store(true, Ordering::Relaxed);
+        }
+        // How much the stroke goes away from the head (1 straight away, -1 straight back).
+        let out = [0, 1, 2].map(|i| swing.hand[i] - eye[i]);
+        let far = out.iter().map(|v| v * v).sum::<f64>().sqrt().max(1e-3);
+        let outward = swing.way.map_or(0.0, |way| (0..3).map(|i| way[i] * out[i]).sum::<f64>() / far);
+        let stroke = swing.speed > 2.5 && ARMED.load(Ordering::Relaxed);
+        let mut s = shared();
+        let target = swing.way.map(|way| [0, 1, 2].map(|i| eye[i] + way[i] * 10.0));
+        match kind {
+            Thrown::Trident => {
+                let hand = horizon_xr::last_hands()?[horizon_xr::Hand::RightGrip as usize]?.offset;
+                if !TRIDENT.load(Ordering::Relaxed) {
+                    if hand.y > -0.1 {
+                        TRIDENT.store(true, Ordering::Relaxed);
+                        THROWING.store(true, Ordering::Relaxed);
+                        s.mouse.push(MouseInput::Button(1, true));
+                    }
+                    return None;
+                }
+                let thrown = stroke && outward > 0.3;
+                if !thrown && hand.y > -0.45 {
+                    return None;
+                }
+                TRIDENT.store(false, Ordering::Relaxed);
+                s.mouse.push(MouseInput::Button(1, false));
+                ARMED.store(false, Ordering::Relaxed);
+                let target = target.filter(|_| thrown)?;
+                *TARGET.lock().unwrap_or_else(std::sync::PoisonError::into_inner) =
+                    Some((now + Duration::from_millis(150), target));
+                Some(target)
+            }
+            Thrown::Rod => {
+                let reel = cast.is_some() && stroke && outward < -0.2
+                    || cast.is_some() && stroke && swing.way.is_some_and(|w| w[1] > 0.6);
+                let throw = cast.is_none() && stroke && outward > 0.3;
+                if !reel && !throw {
+                    return None;
+                }
+                ARMED.store(false, Ordering::Relaxed);
+                *cast = if throw { name.clone() } else { None };
+                s.mouse.push(MouseInput::Button(1, true));
+                s.mouse.push(MouseInput::Button(1, false));
+                let target = target.filter(|_| throw)?;
+                *TARGET.lock().unwrap_or_else(std::sync::PoisonError::into_inner) =
+                    Some((now + Duration::from_millis(150), target));
+                Some(target)
+            }
+            Thrown::Item => {
+                if !stroke || outward < 0.3 {
+                    return None;
+                }
+                let target = target?;
+                ARMED.store(false, Ordering::Relaxed);
+                *TARGET.lock().unwrap_or_else(std::sync::PoisonError::into_inner) =
+                    Some((now + Duration::from_millis(150), target));
+                THROWING.store(true, Ordering::Relaxed);
+                s.mouse.push(MouseInput::Button(1, true));
+                s.mouse.push(MouseInput::Button(1, false));
+                Some(target)
+            }
+        }
+    }
+    /// What `xr_throw` does with the right hand's item.
+    fn xr_thrown_kind(name: Option<&str>) -> Option<Thrown> {
+        match name? {
+            "minecraft:trident" => Some(Thrown::Trident),
+            "minecraft:fishing_rod" => Some(Thrown::Rod),
+            "minecraft:splash_potion"
+            | "minecraft:lingering_potion"
+            | "minecraft:snowball"
+            | "minecraft:egg"
+            | "minecraft:blue_egg"
+            | "minecraft:brown_egg"
+            | "minecraft:ender_pearl"
+            | "minecraft:experience_bottle"
+            | "minecraft:wind_charge" => Some(Thrown::Item),
+            _ => None,
+        }
     }
     /// VR: a swing at a mob, as Vivecraft's: faster than 2.5 m/s (3.75 in creative), the
     /// weapon's reach from the hand (not through blocks) meeting the mob's box. A mob is hit
@@ -727,6 +876,29 @@ impl super::Game<'_> {
                 None => hands[i].clear(),
             }
         }
+        // The shield (our own; Vivecraft blocks with a button): up while its hand is held in
+        // front, at least 15 cm ahead of the head and no lower than the chest. A shield on
+        // the left arm blocks beside a weapon, a tool or an empty right hand (the right hand's
+        // item takes the use first).
+        static SHIELD: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        let items = self.visible_hand_items();
+        let shield = |i: usize| items[i].as_ref().is_some_and(|s| &*s.item == "minecraft:shield");
+        let free = items[0].as_ref().is_none_or(|s| super::vr_is_tool(&s.item));
+        let was = SHIELD.load(std::sync::atomic::Ordering::Relaxed);
+        let world = horizon_xr::last_hands();
+        let ahead = horizon_xr::head_look().map(|(_, _, f)| glam::Vec3::new(f.x, 0.0, f.z).normalize_or(glam::Vec3::NEG_Z));
+        let raised = |hand: Hand| {
+            world.and_then(|h| h[hand as usize]).zip(ahead).is_some_and(|(p, ahead)| {
+                p.offset.y > if was { -0.45 } else { -0.35 } && p.offset.dot(ahead) > if was { 0.1 } else { 0.15 }
+            })
+        };
+        let up = playing
+            && !EATING.load(std::sync::atomic::Ordering::Relaxed)
+            && ((shield(0) && raised(Hand::RightGrip)) || (shield(1) && free && raised(Hand::LeftGrip)));
+        if up != was {
+            SHIELD.store(up, std::sync::atomic::Ordering::Relaxed);
+            shared().mouse.push(MouseInput::Button(1, up));
+        }
         let stick_ahead = horizon_xr::pad().is_some_and(|p| p.left[1] > 0.5);
         let boat = playing
             && self.riding_boat_fluid_box().is_some()
@@ -809,7 +981,14 @@ impl super::Game<'_> {
         let now = Instant::now();
         let playing = self.screen == super::Screen::Playing && self.title.is_none();
         let items = self.visible_hand_items();
-        let held = playing && items.iter().flatten().any(|s| &*s.item == "minecraft:bow");
+        let bow_held = playing && items.iter().flatten().any(|s| &*s.item == "minecraft:bow");
+        // The crossbow (our own; Vivecraft leaves it to the buttons), in the right hand: the
+        // right trigger squeezed with the left hand at it (within 30 cm) cocks it (use held
+        // until it is loaded or the trigger is let go); loaded, the right trigger shoots
+        // along the right hand.
+        let crossbow = playing && items[0].as_ref().is_some_and(|s| &*s.item == "minecraft:crossbow");
+        let loaded = crossbow && items[0].as_ref().and_then(|s| s.data()).is_some_and(|d| !d.charged.is_empty());
+        let held = bow_held || crossbow;
         BOW_HELD.store(held, std::sync::atomic::Ordering::Relaxed);
         let trigger = horizon_xr::pad().is_some_and(|p| p.triggers[1] > 0.5);
         let pressed = trigger && !TRIGGER.swap(trigger, std::sync::atomic::Ordering::Relaxed);
@@ -836,6 +1015,21 @@ impl super::Game<'_> {
         if string.length() > 0.02 {
             let d = string.normalize();
             bow.1 = [f64::from(d.x), f64::from(d.y), f64::from(d.z)];
+        }
+        if crossbow {
+            BOW_DRAWING.store(false, std::sync::atomic::Ordering::Relaxed);
+            if !bow.0 && pressed && loaded {
+                let mut s = shared();
+                s.mouse.push(MouseInput::Button(1, true));
+                s.mouse.push(MouseInput::Button(1, false));
+            } else if !bow.0 && pressed && string.length() < 0.3 {
+                bow.0 = true;
+                shared().mouse.push(MouseInput::Button(1, true));
+            } else if bow.0 && (!trigger || loaded) {
+                bow.0 = false;
+                shared().mouse.push(MouseInput::Button(1, false));
+            }
+            return None;
         }
         if string.length() < 0.2 {
             bow.3 = Some(now + Duration::from_millis(500));
@@ -865,10 +1059,18 @@ impl super::Game<'_> {
         // A swing at a mob first, else the hand's own actions (they track every frame).
         let bow = self.xr_bow();
         let tip = self.xr_right_swing();
+        // A thrown item or a rod in the hand throws (`xr_throw`) and neither hits nor mines; a
+        // trident hits as a sword until it is raised to throw.
+        let thrown = Self::xr_thrown_kind(self.visible_hand_items()[0].as_ref().map(|s| &*s.item));
         let (swing, hand) = if bow.is_some() || BOW_HELD.load(std::sync::atomic::Ordering::Relaxed) {
             (None, None)
         } else {
-            (self.xr_swing(tip), self.xr_hand_actions(tip))
+            let throw = self.xr_throw(tip);
+            if throw.is_some() || matches!(thrown, Some(Thrown::Item | Thrown::Rod)) || THROWING.load(std::sync::atomic::Ordering::Relaxed) {
+                (throw, self.xr_hand_actions(None))
+            } else {
+                (self.xr_swing(tip), self.xr_hand_actions(tip))
+            }
         };
         GESTURE.store(swing.is_some() || hand.is_some(), std::sync::atomic::Ordering::Relaxed);
         if let Some(at) = bow.or(swing).or(hand)
@@ -1018,6 +1220,7 @@ impl super::Game<'_> {
         let angles = horizon_xr::hand_angles(true)
             .filter(|_| {
                 !EATING.load(std::sync::atomic::Ordering::Relaxed)
+                    && !THROWING.load(std::sync::atomic::Ordering::Relaxed)
                     && !BOW_HELD.load(std::sync::atomic::Ordering::Relaxed)
             });
         let Some((yaw, pitch)) = angles else {
