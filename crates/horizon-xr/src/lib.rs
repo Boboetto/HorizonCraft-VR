@@ -1171,6 +1171,12 @@ pub fn room_hands() -> Option<[Option<Vec3>; 4]> {
     Some(xr_state().as_ref()?.session.as_ref()?.hands.map(|h| h.map(|(_, p)| p)))
 }
 
+/// The controllers in the room (orientation and position), by `Hand`: their own movement,
+/// without the player's walking or turning.
+pub fn room_hand_poses() -> Option<[Option<(Quat, Vec3)>; 4]> {
+    Some(xr_state().as_ref()?.session.as_ref()?.hands)
+}
+
 /// The controllers in the world at the last frame, by `Hand`, for the game to put the
 /// player's arms and held items on.
 pub fn last_hands() -> Option<[Option<HandPose>; 4]> {

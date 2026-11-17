@@ -215,12 +215,7 @@ static CONTAINER_SCREEN: std::sync::atomic::AtomicBool = std::sync::atomic::Atom
 /// VR: where the window's player stands and where their head looks (yaw, pitch), for what
 /// asks where a player looks rather than aims (an enderman's stare): the game's own look
 /// goes along the right hand. Read on the server thread too (`Game::player_view`).
-/// VR: the right hand's stroke over the last 80 ms: where its tip was then (in the world,
-/// as the player stands now) and the way it went since (a unit vector).
-static XR_STROKE: Mutex<Option<([f64; 3], [f64; 3])>> = Mutex::new(None);
 pub(super) static XR_HEAD: Mutex<Option<([f64; 3], (f32, f32))>> = Mutex::new(None);
-/// VR: a throw by hand is on its way (`xr_throw`): its use goes where the hand went.
-static THROWING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 static CHAT_BUTTON: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 /// VR: Y closed an inventory or container (`xr_buttons`): it opens nothing until let go.
 static Y_LATCH: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -237,8 +232,49 @@ pub(super) fn xr_gesture_active() -> bool {
 /// VR: a bow is held, so the right trigger draws its string (`xr_bow`), never attacks.
 static BOW_HELD: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-/// VR: the right hand's blade this frame: from the controller to a held tool's tip.
-static XR_BLADE: Mutex<Option<([f64; 3], [f64; 3])>> = Mutex::new(None);
+/// VR: an arrow is nocked or the bow drawn (`xr_bow`): the hands do not row.
+static BOW_DRAWING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// VR: a point's positions over the last second, for Vivecraft's averaged speeds.
+type Samples = Vec<(std::time::Instant, glam::Vec3)>;
+
+fn sample(samples: &mut Samples, now: std::time::Instant, at: glam::Vec3) {
+    samples.push((now, at));
+    samples.retain(|(t, _)| now.duration_since(*t).as_secs_f32() <= 1.0);
+}
+
+/// Vivecraft's `averageSpeed`: the way the point made over the last `window` seconds, per second.
+fn average_speed(samples: &Samples, now: std::time::Instant, window: f32) -> f32 {
+    let recent: Vec<_> = samples.iter().filter(|(t, _)| now.duration_since(*t).as_secs_f32() <= window).collect();
+    let (Some(first), Some(last)) = (recent.first(), recent.last()) else {
+        return 0.0;
+    };
+    let span = last.0.duration_since(first.0).as_secs_f32();
+    if span < 0.05 {
+        return 0.0;
+    }
+    recent.windows(2).map(|p| p[1].1.distance(p[0].1)).sum::<f32>() / span
+}
+
+/// Vivecraft's `averagePosition`: where the point was on average over the last `window` seconds.
+fn average_position(samples: &Samples, now: std::time::Instant, window: f32) -> Option<glam::Vec3> {
+    let recent: Vec<_> = samples.iter().filter(|(t, _)| now.duration_since(*t).as_secs_f32() <= window).collect();
+    (!recent.is_empty()).then(|| recent.iter().map(|(_, p)| *p).sum::<glam::Vec3>() / recent.len() as f32)
+}
+
+/// VR: the right hand this frame (`Game::xr_right_swing`).
+#[derive(Clone, Copy)]
+struct XrSwing {
+    /// The controller in the world, and the way it points.
+    hand: [f64; 3],
+    dir: [f64; 3],
+    /// How far out from the hand the weapon's end mines, and reaches mobs.
+    weapon: f64,
+    entity_reach: f64,
+    /// Metres a second in the room, 30 cm out along the controller, over a third of a second.
+    speed: f32,
+    sword: bool,
+}
 
 /// VR: food or a potion is held at the mouth (the use button held by the gesture).
 static EATING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -465,59 +501,50 @@ impl super::Game<'_> {
     /// plays (a touch brings them back, `touch_event`).
     /// VR: the player looks where the head does (`horizon_xr::look`), through
     /// `Entity.turn` like the mouse, so everything that follows a turn still does.
-    /// VR: the right controller's tip in the world and its speed in the room (metres a
-    /// second). The room's speed is the hand's own: walking, jumping, falling or turning
-    /// the body move the tip in the world, not in the room.
-    /// A held tool's tip is the blade's end (`vr_item_reach`), and `XR_BLADE` keeps the way
-    /// from the hand to it for the blow's test.
-    fn xr_right_tip(&self) -> Option<([f64; 3], f64)> {
+    /// VR: the right hand's swing, measured as Vivecraft's roomscale combat does: a point 30 cm
+    /// out along the controller, its average speed in the room over the last third of a
+    /// second (the hand's own movement: walking or turning adds nothing). The weapon's
+    /// length and reach go by what the hand holds: a sword, trident or spear 0.6 m and
+    /// 2.5 m against mobs, another tool 0.35 m and 1.55 m, any other item 0.1 m and 0.4 m,
+    /// the bare hand 0.3 m against mobs.
+    fn xr_right_swing(&self) -> Option<XrSwing> {
         use std::time::Instant;
-        // The tip over the last 80 ms: when, where in the room, and where from the eyes.
-        static TRAIL: Mutex<Vec<(Instant, [f32; 3], [f64; 3])>> = Mutex::new(Vec::new());
+        static TIP: Mutex<Samples> = Mutex::new(Vec::new());
         let now = Instant::now();
         let eye = self.eye_position()?;
-        let hand = horizon_xr::last_hands()?[horizon_xr::Hand::RightAim as usize]?;
-        let room = horizon_xr::room_hands()?[horizon_xr::Hand::RightAim as usize]?.to_array();
-        let base = [0, 1, 2].map(|i| eye[i] + f64::from(hand.offset[i]));
-        let held = self.visible_hand_items()[0].clone();
-        let reach = match held.as_ref() {
-            Some(stack) if super::vr_is_tool(&stack.item) => f64::from(Self::vr_item_reach(Some(stack))),
-            _ => 0.0,
+        let pose = horizon_xr::last_hands()?[horizon_xr::Hand::RightAim as usize]?;
+        let (rotation, position) = horizon_xr::room_hand_poses()?[horizon_xr::Hand::RightAim as usize]?;
+        let mut tip = TIP.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        sample(&mut tip, now, position + rotation * glam::Vec3::NEG_Z * 0.3);
+        let speed = average_speed(&tip, now, 0.33);
+        let along = pose.rotation * glam::Vec3::NEG_Z;
+        let hand = [0, 1, 2].map(|i| eye[i] + f64::from(pose.offset[i]));
+        let dir = [0, 1, 2].map(|i| f64::from(along[i]));
+        let item = self.visible_hand_items()[0].clone();
+        let name = item.as_ref().map_or("", |s| &*s.item);
+        let sword = name.ends_with("_sword") || name.ends_with("_spear") || name == "minecraft:trident";
+        // Vivecraft's: the player's entity reach (3) less the arm's half metre.
+        let reach = 2.5;
+        let (weapon, entity_add) = if sword {
+            (0.6, reach - 0.6)
+        } else if super::vr_is_tool(name) {
+            (0.35, reach * 0.62 - 0.35)
+        } else if item.is_some() {
+            (0.1, reach * 0.16 - 0.1)
+        } else {
+            (0.0, 0.3)
         };
-        let along = hand.rotation * glam::Vec3::NEG_Z;
-        let tip = [0, 1, 2].map(|i| base[i] + f64::from(along[i]) * reach);
-        *XR_BLADE.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some((base, tip));
-        // The speed is the way made over that time, not between two frames: the tracking's
-        // jitter and a wobble of the wrist make no way, a blow does.
-        let mut trail = TRAIL.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        trail.retain(|(t, _, _)| now.duration_since(*t).as_millis() <= 80);
-        let from_eye = [0, 1, 2].map(|i| tip[i] - eye[i]);
-        let mut speed = 0.0;
-        let mut stroke = None;
-        if let Some(&(t, p, start)) = trail.first() {
-            let dt = now.duration_since(t).as_secs_f64();
-            if dt >= 0.03 {
-                speed = (0..3).map(|i| f64::from(room[i] - p[i]).powi(2)).sum::<f64>().sqrt() / dt;
-                let way = [0, 1, 2].map(|i| from_eye[i] - start[i]);
-                let length = way.iter().map(|v| v * v).sum::<f64>().sqrt();
-                if length > 1e-3 {
-                    stroke = Some(([0, 1, 2].map(|i| eye[i] + start[i]), way.map(|v| v / length)));
-                }
-            }
-        }
-        trail.push((now, room, from_eye));
-        *XR_STROKE.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = stroke;
-        Some((tip, speed))
+        Some(XrSwing { hand, dir, weapon, entity_reach: weapon + entity_add, speed, sword })
     }
-    /// VR: throwing by hand. With something thrown in the right hand (a splash or lingering
-    /// potion, a snowball, an egg, an ender pearl, a bottle o' enchanting, a wind charge), a
-    /// fast move of the hand away from the head throws it the way the hand went. Returns
-    /// where to look while the throw's click lands.
-    fn xr_throw(&mut self, hand: Option<([f64; 3], f64)>) -> Option<[f64; 3]> {
-        use std::sync::atomic::Ordering;
+    /// VR: a swing at a mob, as Vivecraft's: faster than 2.5 m/s (3.75 in creative), the
+    /// weapon's reach from the hand (not through blocks) meeting the mob's box. A mob is hit
+    /// once as the weapon goes into it; it has to come out before it hits again. The player
+    /// turns to it for a moment and the attack goes the usual way (cooldown, damage).
+    /// Returns where to look.
+    fn xr_swing(&mut self, swing: Option<XrSwing>) -> Option<[f64; 3]> {
         use std::time::{Duration, Instant};
         static TARGET: Mutex<Option<(Instant, [f64; 3])>> = Mutex::new(None);
-        static COOLDOWN: Mutex<Option<Instant>> = Mutex::new(None);
+        static LAST: Mutex<(Vec<u32>, Option<[f64; 3]>)> = Mutex::new((Vec::new(), None));
         let now = Instant::now();
         let held = *TARGET.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some((until, at)) = held
@@ -525,134 +552,47 @@ impl super::Game<'_> {
         {
             return Some(at);
         }
-        // A trident: raised beside the head it is held back (use held, charging), a fast move
-        // forward throws it the way the hand went; lowered again, it goes where the hand points.
-        static TRIDENT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        let mut last = LAST.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let playing = self.screen == super::Screen::Playing && self.title.is_none();
-        let name = self.visible_hand_items()[0].as_ref().map(|s| s.item.clone()).filter(|_| playing);
-        let trident = name.as_deref() == Some("minecraft:trident");
-        let charging = TRIDENT.load(Ordering::Relaxed);
-        if charging && !trident {
-            TRIDENT.store(false, Ordering::Relaxed);
-            shared().mouse.push(MouseInput::Button(1, false));
-        }
-        THROWING.store(charging && trident, Ordering::Relaxed);
-        if !playing {
+        let Some(swing) = swing.filter(|_| playing) else {
+            *last = (Vec::new(), None);
             return None;
-        }
-        let (_, speed) = hand?;
-        let stroke = *XR_STROKE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        let eye = self.eye_position()?;
-        // How much the stroke goes away from the head (1 straight away).
-        let outward = stroke.map_or(0.0, |(from, way)| {
-            let out = [0, 1, 2].map(|i| from[i] - eye[i]);
-            let far = out.iter().map(|v| v * v).sum::<f64>().sqrt().max(1e-3);
-            (0..3).map(|i| way[i] * out[i]).sum::<f64>() / far
-        });
-        if trident {
-            let hand = horizon_xr::last_hands()?[horizon_xr::Hand::RightGrip as usize]?.offset;
-            let ahead = horizon_xr::head_look().map(|(yaw, _, _)| super::pick_view_vector(yaw, 0.0))?;
-            let forward = f64::from(hand.x) * ahead[0] + f64::from(hand.z) * ahead[2];
-            if !charging {
-                if hand.y > -0.12 && forward < 0.3 {
-                    TRIDENT.store(true, Ordering::Relaxed);
-                    THROWING.store(true, Ordering::Relaxed);
-                    shared().mouse.push(MouseInput::Button(1, true));
-                }
-                return None;
+        };
+        let length = self
+            .clip_ray(swing.hand, swing.dir, swing.entity_reach)
+            .map_or(swing.entity_reach, |hit| {
+                (0..3).map(|i| (hit.point[i] - swing.hand[i]).powi(2)).sum::<f64>().sqrt()
+            });
+        let tip = [0, 1, 2].map(|i| swing.hand[i] + swing.dir[i] * length);
+        // The box from the hand to the tip, and to the last tip for a fast swing.
+        let mut lo = [0, 1, 2].map(|i| swing.hand[i].min(tip[i]));
+        let mut hi = [0, 1, 2].map(|i| swing.hand[i].max(tip[i]));
+        if let Some(before) = last.1 {
+            for i in 0..3 {
+                lo[i] = lo[i].min(before[i]);
+                hi[i] = hi[i].max(before[i]);
             }
-            let thrown = speed >= 2.0 && outward > 0.3;
-            if !thrown && hand.y > -0.35 {
-                return None;
-            }
-            TRIDENT.store(false, Ordering::Relaxed);
-            shared().mouse.push(MouseInput::Button(1, false));
-            let (_, way) = stroke.filter(|_| thrown)?;
-            let target = [0, 1, 2].map(|i| eye[i] + way[i] * 10.0);
-            *TARGET.lock().unwrap_or_else(std::sync::PoisonError::into_inner) =
-                Some((now + Duration::from_millis(150), target));
-            THROWING.store(true, Ordering::Relaxed);
-            return Some(target);
         }
-        let mut cooldown = COOLDOWN.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        if speed < 2.5 || cooldown.is_some_and(|t| now < t) {
-            return None;
-        }
-        // A fishing rod: a flick forward casts the way the hand went, a flick back reels in.
-        let rod = name.as_deref() == Some("minecraft:fishing_rod");
-        if rod && outward < 0.3 {
-            *cooldown = Some(now + Duration::from_millis(800));
-            THROWING.store(true, Ordering::Relaxed);
-            let mut s = shared();
-            s.mouse.push(MouseInput::Button(1, true));
-            s.mouse.push(MouseInput::Button(1, false));
-            return None;
-        }
-        let thrown = rod || self.visible_hand_items()[0].as_ref().is_some_and(|stack| {
-            matches!(
-                &*stack.item,
-                "minecraft:splash_potion"
-                    | "minecraft:lingering_potion"
-                    | "minecraft:snowball"
-                    | "minecraft:egg"
-                    | "minecraft:blue_egg"
-                    | "minecraft:brown_egg"
-                    | "minecraft:ender_pearl"
-                    | "minecraft:experience_bottle"
-                    | "minecraft:wind_charge"
-            )
-        });
-        // Away from the head, not a hand coming back or dropping to the side.
-        if !thrown || outward < 0.3 {
-            return None;
-        }
-        let (_, way) = stroke?;
-        let target = [0, 1, 2].map(|i| eye[i] + way[i] * 10.0);
-        *cooldown = Some(now + Duration::from_millis(if rod { 800 } else { 600 }));
-        *TARGET.lock().unwrap_or_else(std::sync::PoisonError::into_inner) =
-            Some((now + Duration::from_millis(150), target));
-        THROWING.store(true, Ordering::Relaxed);
-        let mut s = shared();
-        s.mouse.push(MouseInput::Button(1, true));
-        s.mouse.push(MouseInput::Button(1, false));
-        Some(target)
-    }
-    /// VR: a swing of the right controller (at least 2.5 m/s in the room) whose tip meets
-    /// a mob hits it, as a click on it would: the player turns to it for a moment and the
-    /// attack goes the usual way (reach, cooldown, damage). Returns where to look.
-    fn xr_swing(&mut self, hand: Option<([f64; 3], f64)>) -> Option<[f64; 3]> {
-        use std::time::{Duration, Instant};
-        static TARGET: Mutex<Option<(Instant, [f64; 3])>> = Mutex::new(None);
-        static COOLDOWN: Mutex<Option<Instant>> = Mutex::new(None);
-        let now = Instant::now();
-        let held = *TARGET.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        if let Some((until, at)) = held
-            && now < until
-        {
-            return Some(at);
-        }
-        if self.screen != super::Screen::Playing || self.title.is_some() {
-            return None;
-        }
-        let (tip, speed) = hand?;
-        let mut cooldown = COOLDOWN.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        if speed < 2.5 || cooldown.is_some_and(|t| now < t) {
-            return None;
-        }
-        // A mob the tip is in or touching: within 0.6 m of its middle sideways, between its
-        // feet and two metres up.
-        let target = self
+        last.1 = Some(tip);
+        let weapon = horizon_core::geometry::Aabb::new(
+            horizon_core::geometry::Vec3::new(lo[0], lo[1], lo[2]),
+            horizon_core::geometry::Vec3::new(hi[0], hi[1], hi[2]),
+        );
+        let threshold = if self.creative { 3.75 } else { 2.5 };
+        let inside: Vec<(u32, [f64; 3])> = self
             .mobs
             .iter()
-            .filter(|m| m.alive())
-            .filter_map(|m| {
-                let (x, y, z) = (m.position.x as f64, m.position.y as f64, m.position.z as f64);
-                let side = (tip[0] - x).hypot(tip[2] - z);
-                (side < 0.6 && tip[1] > y - 0.1 && tip[1] < y + 2.0).then_some(([x, tip[1], z], side))
+            .filter(|m| m.alive() && m.hitbox().intersects(weapon))
+            .map(|m| {
+                let b = m.hitbox();
+                let (a, z) = (b.min_position(), b.max_position());
+                (m.id, [(a.x + z.x) / 2.0, (a.y + z.y) / 2.0, (a.z + z.z) / 2.0])
             })
-            .min_by(|a, b| a.1.total_cmp(&b.1))?
-            .0;
-        *cooldown = Some(now + Duration::from_millis(400));
+            .collect();
+        let fast = swing.speed > threshold;
+        let target = inside.iter().find(|(id, _)| fast && !last.0.contains(id)).map(|&(_, at)| at);
+        last.0 = if fast { inside.iter().map(|&(id, _)| id).collect() } else { Vec::new() };
+        let target = target?;
         *TARGET.lock().unwrap_or_else(std::sync::PoisonError::into_inner) =
             Some((now + Duration::from_millis(150), target));
         let mut s = shared();
@@ -660,77 +600,100 @@ impl super::Game<'_> {
         s.mouse.push(MouseInput::Button(0, false));
         Some(target)
     }
-    /// VR: what the right hand does. A blow into a block (the tip entering it from the air,
-    /// towards it, at 1.8 m/s or more in the room) digs it a few ticks' worth, as Vivecraft's
-    /// roomscale mining: keep striking to break it. Resting or moving slowly does nothing. Food or a potion held near the mouth is eaten or drunk (use held).
-    /// Returns where to look while mining.
-    fn xr_hand_actions(&mut self, hand: Option<([f64; 3], f64)>) -> Option<[f64; 3]> {
+    /// VR: what the hands do without a click. Mining as Vivecraft's roomscale mining: the
+    /// weapon's end (`XrSwing::weapon` out from the hand), moving faster than 2.5 m/s, going
+    /// from the air into a block digs it three ticks' worth, up to four more for a harder
+    /// blow; then it has to come out before the next blow. A sword only cuts what breaks at
+    /// once. Food or drink as Vivecraft's eating: held within 25 cm of the eyes (20 cm out
+    /// along the controller, its position averaged over a third of a second) it is eaten,
+    /// a drink only with the controller tipped over; after 2.1 s the use starts again.
+    /// Returns where to look while a blow lands.
+    fn xr_hand_actions(&mut self, swing: Option<XrSwing>) -> Option<[f64; 3]> {
+        use std::sync::atomic::Ordering;
         use std::time::{Duration, Instant};
         static MINING: Mutex<Option<([i32; 3], Instant)>> = Mutex::new(None);
+        static POINT: Mutex<(Option<[f64; 3]>, bool)> = Mutex::new((None, false));
+        static FOOD: Mutex<[Samples; 2]> = Mutex::new([Vec::new(), Vec::new()]);
+        static EAT_START: Mutex<Option<Instant>> = Mutex::new(None);
         let now = Instant::now();
         let playing = self.screen == super::Screen::Playing && self.title.is_none();
-        let place = playing.then_some(()).and(hand).zip(self.eye_position());
         let mut s = shared();
         let mut mining = MINING.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        let Some(((tip, speed), eye)) = place else {
+        let mut point = POINT.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let Some(swing) = swing.filter(|_| playing) else {
             mining.take();
-            if EATING.swap(false, std::sync::atomic::Ordering::Relaxed) {
+            *point = (None, false);
+            if EATING.swap(false, Ordering::Relaxed) {
                 s.mouse.push(MouseInput::Button(1, false));
             }
             return None;
         };
-        // The mouth: a little below the eyes; anywhere within 30 cm of it will do.
-        let mouth = [eye[0], eye[1] - 0.12, eye[2]];
-        let (base, blade_tip) =
-            XR_BLADE.lock().unwrap_or_else(std::sync::PoisonError::into_inner).unwrap_or((tip, tip));
-        let near_mouth = (0..3).map(|i| (base[i] - mouth[i]).powi(2)).sum::<f64>().sqrt() < 0.3;
-        let edible = near_mouth
-            && self.visible_hand_items()[0].as_ref().is_some_and(|stack| {
+        // Eating and drinking, either hand.
+        let items = self.visible_hand_items();
+        let hands = horizon_xr::last_hands();
+        let mut food = FOOD.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut edible = false;
+        for (i, hand) in [(0, horizon_xr::Hand::RightAim), (1, horizon_xr::Hand::LeftAim)] {
+            let kind = items[i].as_ref().and_then(|stack| {
                 let components = self
                     .pack
                     .item_renderer
                     .models
                     .components(&horizon_client::item_render::stack_view(stack));
-                components.get("minecraft:consumable").is_some() || components.get("minecraft:food").is_some()
+                let drink = matches!(&*stack.item, "minecraft:potion" | "minecraft:milk_bucket" | "minecraft:honey_bottle" | "minecraft:ominous_bottle");
+                (components.get("minecraft:consumable").is_some() || components.get("minecraft:food").is_some())
+                    .then_some(drink)
             });
-        if EATING.swap(edible, std::sync::atomic::Ordering::Relaxed) != edible {
-            s.mouse.push(MouseInput::Button(1, edible));
+            let pose = hands.and_then(|h| h[hand as usize]);
+            let (Some(drink), Some(pose)) = (kind, pose) else {
+                food[i].clear();
+                continue;
+            };
+            let at = pose.offset + pose.rotation * glam::Vec3::NEG_Z * 0.2;
+            sample(&mut food[i], now, at);
+            let near = average_position(&food[i], now, 0.333).is_some_and(|p| p.length() < 0.25);
+            let tipped = (pose.rotation * glam::Vec3::Y).y <= 0.0;
+            // The main hand's food first, as the use goes.
+            if near && (!drink || tipped) && (i == 0 || !edible) {
+                edible = true;
+            }
         }
-        // The first block along the blade (the hand alone without a tool), not air or a fluid.
+        drop(food);
+        let mut start = EAT_START.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let eating = EATING.load(Ordering::Relaxed);
+        if eating && (!edible || start.is_some_and(|t| now.duration_since(t) > Duration::from_millis(2100))) {
+            EATING.store(false, Ordering::Relaxed);
+            s.mouse.push(MouseInput::Button(1, false));
+        } else if !eating && edible {
+            EATING.store(true, Ordering::Relaxed);
+            *start = Some(now);
+            s.mouse.push(MouseInput::Button(1, true));
+        }
+        drop(start);
+        // Mining: from the weapon's end at the last frame to now, the first block entered
+        // from the air.
         let solid = |b: [i32; 3]| {
             let state = self.world.block(b[0], b[1], b[2]);
             !self.res.facts().is_air(state)
                 && !matches!(&*self.res.facts().get(state).name, "minecraft:water" | "minecraft:lava" | "minecraft:bubble_column")
         };
-        let length = (0..3).map(|i| (blade_tip[i] - base[i]).powi(2)).sum::<f64>().sqrt();
-        let steps = (length / 0.05).ceil().max(1.0) as usize;
-        let block = (0..=steps)
-            .map(|k| {
-                let t = k as f64 / steps as f64;
-                [0, 1, 2].map(|i| (base[i] + (blade_tip[i] - base[i]) * t).floor() as i32)
-            })
-            .find(|&b| solid(b))
-            .unwrap_or_else(|| blade_tip.map(|v| v.floor() as i32));
-        // A blow meant for the block, as Vivecraft's and QuestCraft's: the tip came from open
-        // air, fast, and towards it. A hand carried along a wall while walking, a blade
-        // already in the blocks or a turn of the wrist strikes nothing.
-        let stroke = *XR_STROKE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        let meant = stroke.is_some_and(|(from, way)| {
-            let to = [0, 1, 2].map(|i| f64::from(block[i]) + 0.5 - from[i]);
-            let far = to.iter().map(|v| v * v).sum::<f64>().sqrt().max(1e-3);
-            let towards = (0..3).map(|i| way[i] * to[i]).sum::<f64>() / far;
-            !solid(from.map(|v| v.floor() as i32)) && towards > 0.45
-        });
-        // One blow per entry: the blade has to come out of the blocks before it strikes again.
-        static INSIDE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-        let inside = solid(block);
-        let was_inside = INSIDE.swap(inside, std::sync::atomic::Ordering::Relaxed);
-        let struck = !edible && !was_inside && speed >= 1.8 && meant && inside;
-        if struck {
-            // As Vivecraft's roomscale mining: a blow is three ticks of digging, up to four more
-            // for a harder one. The crack stays still between blows, without sounds, for ten
-            // seconds (`Game::vr_mining_held`).
-            let ticks = 3 + (speed - 1.8).clamp(0.0, 4.0) as u32;
+        let end = [0, 1, 2].map(|i| swing.hand[i] + swing.dir[i] * swing.weapon);
+        let from = point.0.replace(end).unwrap_or(end);
+        let way = (0..3).map(|i| (end[i] - from[i]).powi(2)).sum::<f64>().sqrt();
+        let steps = (way / 0.02).ceil().max(1.0) as usize;
+        let cell = |t: f64| [0, 1, 2].map(|i| (from[i] + (end[i] - from[i]) * t).floor() as i32);
+        let entered = (!solid(cell(0.0)))
+            .then(|| (1..=steps).map(|k| cell(k as f64 / steps as f64)).find(|&b| solid(b)))
+            .flatten();
+        let threshold = if self.creative { 3.75 } else { 2.5 };
+        let can_act = !edible && swing.speed > threshold && !point.1;
+        let end_solid = solid(cell(1.0));
+        let block = entered.filter(|_| can_act);
+        let block = block.filter(|&b| !swing.sword || self.destroy_progress(b) >= 1.0);
+        // Vivecraft's `lastWeaponSolid`: set by a blow, cleared once the end is out again.
+        point.1 = if block.is_some() { true } else { point.1 && end_solid };
+        if let Some(block) = block {
+            let ticks = 3 + (swing.speed - threshold).clamp(0.0, 4.0) as u32;
             *super::remote::VR_MINING_HOLD.lock().unwrap_or_else(std::sync::PoisonError::into_inner) =
                 Some(now + Duration::from_secs(10));
             super::remote::VR_BLOWS.lock().unwrap_or_else(std::sync::PoisonError::into_inner).push(ticks);
@@ -745,153 +708,108 @@ impl super::Game<'_> {
             None => None,
         }
     }
-    /// VR: what the arms do without a click. A shield raised in front blocks (use held while
-    /// it is up); in a boat the hands rowing backwards paddle (both go ahead, one alone turns away from its side).
+    /// VR: rowing, as Vivecraft's: in a boat, with the stick not pushed ahead and no arrow
+    /// nocked, each hand's average speed over half a second, less half a metre a second
+    /// (two at most), is its oar. Both oars push ahead; one more than the other turns the
+    /// boat away from its side.
     fn xr_body(&mut self) {
         use horizon_xr::Hand;
-        use std::sync::atomic::{AtomicBool, Ordering};
-        use std::time::{Duration, Instant};
-        static LAST: Mutex<Option<(Instant, [Option<glam::Vec3>; 2])>> = Mutex::new(None);
-        static SHIELD: AtomicBool = AtomicBool::new(false);
-        static ROWING: Mutex<([Option<Instant>; 2], bool)> = Mutex::new(([None; 2], false));
+        use std::time::Instant;
+        static HANDS: Mutex<[Samples; 2]> = Mutex::new([Vec::new(), Vec::new()]);
+        static ROWING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
         let now = Instant::now();
         let playing = self.screen == super::Screen::Playing && self.title.is_none();
-        let room = horizon_xr::room_hands().map(|h| [h[Hand::LeftGrip as usize], h[Hand::RightGrip as usize]]);
-        let previous = std::mem::replace(
-            &mut *LAST.lock().unwrap_or_else(std::sync::PoisonError::into_inner),
-            room.map(|h| (now, h)),
-        );
-        // The shield: up while its hand is above the chest and out in front of the body.
-        let items = self.visible_hand_items();
-        let shield = |i: usize| items[i].as_ref().is_some_and(|s| &*s.item == "minecraft:shield");
-        // The right hand's item takes the use first: a shield on the left arm blocks beside a
-        // weapon, a tool or an empty hand.
-        let free = items[0].as_ref().is_none_or(|s| super::vr_is_tool(&s.item));
-        let was = SHIELD.load(Ordering::Relaxed);
-        let world = horizon_xr::last_hands();
-        let raised = |hand: Hand| {
-            world.and_then(|h| h[hand as usize]).is_some_and(|p| {
-                p.offset.y > if was { -0.40 } else { -0.28 } && p.offset.x.hypot(p.offset.z) > 0.18
-            })
-        };
-        let up = playing
-            && !EATING.load(Ordering::Relaxed)
-            && ((shield(0) && raised(Hand::RightGrip)) || (shield(1) && free && raised(Hand::LeftGrip)));
-        if up != was {
-            SHIELD.store(up, Ordering::Relaxed);
-            shared().mouse.push(MouseInput::Button(1, up));
+        let room = horizon_xr::room_hands();
+        let mut hands = HANDS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        for (i, hand) in [(0, Hand::LeftGrip), (1, Hand::RightGrip)] {
+            match room.and_then(|r| r[hand as usize]) {
+                Some(p) => sample(&mut hands[i], now, p),
+                None => hands[i].clear(),
+            }
         }
-        let mut rowing = ROWING.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        let boat = playing && self.riding_boat_fluid_box().is_some();
-        let speeds = room.zip(previous).and_then(|(hands, (then, before))| {
-            let dt = now.duration_since(then).as_secs_f32();
-            (0.001..0.1).contains(&dt).then(|| [0, 1].map(|i| Some((hands[i]? - before[i]?) / dt)))
-        });
-        if !boat && std::mem::take(&mut rowing.1) {
+        let stick_ahead = horizon_xr::pad().is_some_and(|p| p.left[1] > 0.5);
+        let boat = playing
+            && self.riding_boat_fluid_box().is_some()
+            && !stick_ahead
+            && !BOW_DRAWING.load(std::sync::atomic::Ordering::Relaxed);
+        let oar = |i: usize| (average_speed(&hands[i], now, 0.5) - 0.5).clamp(0.0, 2.0);
+        let (left, right) = (oar(0), oar(1));
+        let ahead = if left > 0.0 && right > 0.0 { (left + right) / 2.0 } else { 0.0 };
+        let rowing = boat && left + right + ahead > 0.0;
+        if rowing {
+            // The boat's own input: ahead at Vivecraft's min(0.04, 0.06 × oars) of its 0.04,
+            // a turn of (left − right) / 1.5 degrees a tick of its one.
+            self.pad.injected.left = [((left - right) / 1.5).clamp(-1.0, 1.0), (0.06 * ahead / 0.04).min(1.0)];
+            ROWING.store(true, std::sync::atomic::Ordering::Relaxed);
+        } else if ROWING.swap(false, std::sync::atomic::Ordering::Relaxed) {
             self.pad.injected.left = [0.0; 2];
         }
-        let Some(speeds) = speeds else {
-            return;
-        };
-        if boat && let Some((_, _, forward)) = horizon_xr::head_look() {
-            let ahead = glam::Vec3::new(forward.x, 0.0, forward.z).normalize_or(glam::Vec3::NEG_Z);
-            for i in 0..2 {
-                if speeds[i].is_some_and(|v| -v.dot(ahead) > 0.7) {
-                    rowing.0[i] = Some(now + Duration::from_millis(350));
-                }
-            }
-            let on = [0, 1].map(|i| rowing.0[i].is_some_and(|t| now < t));
-            let stick = match on {
-                [true, true] => Some([0.0, 1.0]),
-                [true, false] => Some([1.0, 0.0]),
-                [false, true] => Some([-1.0, 0.0]),
-                _ => None,
-            };
-            if let Some(stick) = stick {
-                self.pad.injected.left = stick;
-                rowing.1 = true;
-            } else if std::mem::take(&mut rowing.1) {
-                self.pad.injected.left = [0.0; 2];
-            }
-        }
     }
-    /// VR: swimming by breaststroke. In water, hands sweeping outward (and back) at more than
-    /// half a metre a second push the player where the head looks, as hard as they sweep;
-    /// water's drag slows them again as usual.
+    /// VR: swimming, as Vivecraft's: in water or lava with the stick at rest, hands drawn in
+    /// towards the body (the middle between them coming nearer the neck) push the player
+    /// out towards where the hands and the head point, as much as they came nearer; the push
+    /// fades by a tenth each tick.
     fn xr_swim(&mut self) {
-        use std::time::Instant;
-        static LAST: Mutex<Option<(Instant, [Option<glam::Vec3>; 2])>> = Mutex::new(None);
+        use std::time::{Duration, Instant};
+        static STATE: Mutex<(Option<Instant>, f64, [f64; 3])> = Mutex::new((None, 0.0, [0.0; 3]));
         let now = Instant::now();
-        let hands = horizon_xr::room_hands().map(|h| {
-            [h[horizon_xr::Hand::LeftGrip as usize], h[horizon_xr::Hand::RightGrip as usize]]
-        });
-        let mut last = LAST.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        let previous = std::mem::replace(&mut *last, hands.map(|h| (now, h)));
+        let mut state = STATE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let playing = self.screen == super::Screen::Playing && self.title.is_none();
-        let in_water = self.player.as_ref().is_some_and(|p| p.fluids.was_touching_water);
-        let (Some(hands), Some((then, before)), Some((yaw, pitch, forward))) =
-            (hands, previous, horizon_xr::head_look())
-        else {
+        let wet = self.player.as_ref().is_some_and(|p| p.fluids.was_touching_water);
+        let still = horizon_xr::pad().is_none_or(|p| p.left[0].abs() < 0.1 && p.left[1].abs() < 0.1);
+        let hands = horizon_xr::last_hands().and_then(|h| {
+            Some((h[horizon_xr::Hand::LeftAim as usize]?, h[horizon_xr::Hand::RightAim as usize]?))
+        });
+        let (Some((left, right)), Some((_, _, forward))) = (hands, horizon_xr::head_look()) else {
             return;
         };
-        if !playing || !in_water || self.riding.is_some() {
+        if !playing || !wet || !still || self.riding.is_some() {
+            *state = (None, 0.0, [0.0; 3]);
             return;
         }
-        let dt = now.duration_since(then).as_secs_f32();
-        if !(0.001..0.1).contains(&dt) {
+        // Once a tick.
+        if state.0.is_some_and(|t| now.duration_since(t) < Duration::from_millis(50)) {
             return;
         }
-        // Breaststroke: the hands circle from the middle outward (the right one clockwise, the
-        // left one anticlockwise, seen from above), so each sweeps out to its side and back.
-        // Metres a second of that sweep, the stronger hand.
-        let ahead = glam::Vec3::new(forward.x, 0.0, forward.z).normalize_or(glam::Vec3::NEG_Z);
-        let right = ahead.cross(glam::Vec3::Y).normalize_or(glam::Vec3::X);
-        let pull = (0..2)
-            .filter_map(|i| Some((i, (hands[i]? - before[i]?) / dt)))
-            .map(|(i, v)| {
-                let outward = if i == 1 { right } else { -right };
-                v.dot(outward).max(0.0) + 0.5 * (-v.dot(ahead)).max(0.0)
-            })
-            .fold(0.0f32, f32::max);
-        if pull < 0.5 {
-            return;
-        }
-        let dir = super::pick_view_vector(yaw, pitch);
-        // Per tick, 0.02 blocks a tick for each metre a second: with water's drag a steady
-        // 2 m/s stroke swims about 4 blocks a second.
-        let push = 0.02 * f64::from(pull.min(4.0)) * f64::from(dt) * 20.0;
-        if let Some(p) = self.player.as_mut() {
-            let v = &mut p.velocity;
-            v.x += dir[0] * push;
-            v.y += dir[1] * push;
-            v.z += dir[2] * push;
-            let speed = (v.x * v.x + v.y * v.y + v.z * v.z).sqrt();
-            if speed > 0.35 {
-                let k = 0.35 / speed;
-                v.x *= k;
-                v.y *= k;
-                v.z *= k;
+        let first = state.0.replace(now).is_none();
+        let middle = (left.offset + right.offset) * 0.5;
+        let neck = glam::Vec3::new(0.0, -0.3, 0.0);
+        let move_dir = ((middle - neck).normalize_or_zero() + forward) * 0.5;
+        let hands_dir = (left.rotation * glam::Vec3::NEG_Z + right.rotation * glam::Vec3::NEG_Z) * 0.5;
+        let dir_factor = (hands_dir + move_dir).length() * 0.5;
+        let distance = f64::from(neck.distance(middle));
+        let delta = state.1 - distance;
+        state.1 = distance;
+        if !first && delta > 0.0 {
+            let k = delta * 1.3 * f64::from(dir_factor) * 0.15;
+            for i in 0..3 {
+                state.2[i] += f64::from(move_dir[i]) * k;
             }
         }
+        let motion = state.2;
+        if let Some(p) = self.player.as_mut() {
+            p.velocity.x += motion[0];
+            p.velocity.y += motion[1];
+            p.velocity.z += motion[2];
+        }
+        state.2 = motion.map(|v| v * 0.9);
     }
-    /// VR: the bow with both hands. The bow shows in the left hand; the right trigger
-    /// squeezed with the right hand near it takes the string and holds use (drawing the
-    /// bow), and letting go shoots. The arrow flies from the right hand through the left,
-    /// so the player looks that way while drawing and a moment after. Returns where to look.
+    /// VR: the bow with both hands, as Vivecraft's: held in either hand it shows in the left
+    /// one; the right hand brought to it (within 20 cm) nocks an arrow for half a second,
+    /// the right trigger squeezed then draws (use held) and letting go shoots. The arrow
+    /// flies from the right hand through the left, so the player looks that way while
+    /// drawing and a moment after. Returns where to look.
     fn xr_bow(&mut self) -> Option<[f64; 3]> {
         use std::time::{Duration, Instant};
-        // Drawing, the last aim, and until when the player keeps looking along it.
-        static BOW: Mutex<(bool, [f64; 3], Option<Instant>)> = Mutex::new((false, [0.0; 3], None));
+        // Drawing, the last aim, until when the player keeps looking along it, and until when
+        // an arrow stays nocked.
+        static BOW: Mutex<(bool, [f64; 3], Option<Instant>, Option<Instant>)> =
+            Mutex::new((false, [0.0; 3], None, None));
         static TRIGGER: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
         let now = Instant::now();
         let playing = self.screen == super::Screen::Playing && self.title.is_none();
-        // A crossbow goes the same way: the trigger squeezed with the other hand at it cocks
-        // the string (held until it is loaded), and a loaded one shoots at the trigger, along
-        // the right hand.
-        let item = self.visible_hand_items()[0].clone().filter(|_| playing);
-        let crossbow = item.as_ref().is_some_and(|s| &*s.item == "minecraft:crossbow");
-        let loaded = crossbow && item.as_ref().and_then(|s| s.data()).is_some_and(|d| !d.charged.is_empty());
-        let held = crossbow || item.as_ref().is_some_and(|s| &*s.item == "minecraft:bow");
+        let items = self.visible_hand_items();
+        let held = playing && items.iter().flatten().any(|s| &*s.item == "minecraft:bow");
         BOW_HELD.store(held, std::sync::atomic::Ordering::Relaxed);
         let trigger = horizon_xr::pad().is_some_and(|p| p.triggers[1] > 0.5);
         let pressed = trigger && !TRIGGER.swap(trigger, std::sync::atomic::Ordering::Relaxed);
@@ -910,6 +828,7 @@ impl super::Game<'_> {
                     bow.0 = false;
                     shared().mouse.push(MouseInput::Button(1, false));
                 }
+                BOW_DRAWING.store(false, std::sync::atomic::Ordering::Relaxed);
                 return None;
             }
         };
@@ -918,11 +837,11 @@ impl super::Game<'_> {
             let d = string.normalize();
             bow.1 = [f64::from(d.x), f64::from(d.y), f64::from(d.z)];
         }
-        if !bow.0 && pressed && loaded {
-            let mut s = shared();
-            s.mouse.push(MouseInput::Button(1, true));
-            s.mouse.push(MouseInput::Button(1, false));
-        } else if !bow.0 && pressed && string.length() < if crossbow { 0.3 } else { 0.2 } {
+        if string.length() < 0.2 {
+            bow.3 = Some(now + Duration::from_millis(500));
+        }
+        let nocked = bow.3.is_some_and(|t| now < t);
+        if !bow.0 && pressed && nocked {
             bow.0 = true;
             shared().mouse.push(MouseInput::Button(1, true));
         } else if bow.0 && !trigger {
@@ -930,7 +849,8 @@ impl super::Game<'_> {
             bow.2 = Some(now + Duration::from_millis(150));
             shared().mouse.push(MouseInput::Button(1, false));
         }
-        let aiming = !crossbow && (bow.0 || bow.2.is_some_and(|t| now < t));
+        BOW_DRAWING.store(bow.0 || nocked, std::sync::atomic::Ordering::Relaxed);
+        let aiming = bow.0 || bow.2.is_some_and(|t| now < t);
         aiming.then(|| [0, 1, 2].map(|i| eye[i] + bow.1[i] * 10.0))
     }
     pub(super) fn xr_look(&mut self) {
@@ -944,11 +864,11 @@ impl super::Game<'_> {
         self.xr_body();
         // A swing at a mob first, else the hand's own actions (they track every frame).
         let bow = self.xr_bow();
-        let tip = self.xr_right_tip();
+        let tip = self.xr_right_swing();
         let (swing, hand) = if bow.is_some() || BOW_HELD.load(std::sync::atomic::Ordering::Relaxed) {
             (None, None)
         } else {
-            (self.xr_throw(tip).or_else(|| self.xr_swing(tip)), self.xr_hand_actions(tip))
+            (self.xr_swing(tip), self.xr_hand_actions(tip))
         };
         GESTURE.store(swing.is_some() || hand.is_some(), std::sync::atomic::Ordering::Relaxed);
         if let Some(at) = bow.or(swing).or(hand)
@@ -1098,7 +1018,6 @@ impl super::Game<'_> {
         let angles = horizon_xr::hand_angles(true)
             .filter(|_| {
                 !EATING.load(std::sync::atomic::Ordering::Relaxed)
-                    && !THROWING.load(std::sync::atomic::Ordering::Relaxed)
                     && !BOW_HELD.load(std::sync::atomic::Ordering::Relaxed)
             });
         let Some((yaw, pitch)) = angles else {
