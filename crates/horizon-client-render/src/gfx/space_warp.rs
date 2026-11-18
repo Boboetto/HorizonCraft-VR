@@ -75,10 +75,27 @@ struct WorldOut {
 
 // The world: each pixel's point from the depth (reversed Z; 0 is the sky, a point at
 // infinity, which only the rig's turn moves).
-@fragment fn fs_world(in: ScreenOut) -> WorldOut {
+// The depth over the motion texel's whole footprint in the eye's depth, its nearest point:
+// one sample of a bush or of leaves' cut-out holes picks the leaf or what is behind it at
+// random from frame to frame, and the made-up frames then smear the foliage; the nearest
+// over the footprint treats a bush as solid, steady from frame to frame.
+fn footprint_depth(uv: vec2<f32>) -> f32 {
     let size = params.misc.zw;
-    let texel = vec2<i32>(clamp(in.uv * size, vec2<f32>(0.0), size - 1.0));
-    let d = textureLoad(depth, texel, 0);
+    let step = size / params.target_size.xy;
+    let corner = uv * size - step * 0.5;
+    var nearest = 0.0;
+    for (var y = 0; y < 4; y++) {
+        for (var x = 0; x < 4; x++) {
+            let at = corner + step * (vec2<f32>(f32(x), f32(y)) + 0.5) / 4.0;
+            let texel = vec2<i32>(clamp(at, vec2<f32>(0.0), size - 1.0));
+            nearest = max(nearest, textureLoad(depth, texel, 0));
+        }
+    }
+    return nearest;
+}
+
+@fragment fn fs_world(in: ScreenOut) -> WorldOut {
+    let d = footprint_depth(in.uv);
     let ndc = vec4<f32>(in.uv.x * 2.0 - 1.0, 1.0 - in.uv.y * 2.0, d, 1.0);
     let p = params.inverse_view_proj * ndc;
     let q = vec4<f32>(p.xyz + params.moved.xyz * p.w, p.w);
