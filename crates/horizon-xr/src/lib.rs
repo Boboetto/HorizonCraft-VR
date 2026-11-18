@@ -16,6 +16,7 @@
 #![cfg(target_os = "android")]
 
 mod blit;
+mod warp;
 
 use ash::vk::{self, Handle};
 use glam::{Quat, Vec3};
@@ -193,6 +194,9 @@ struct Xr {
     session: Option<Session>,
     /// The compositor sharpens the eyes' layer (`XR_FB_composition_layer_settings`).
     sharpen: bool,
+    /// Application SpaceWarp (`XR_FB_space_warp`): on unless `HORIZON_XR_SPACEWARP=0`
+    /// (the launcher's `spacewarp=0`).
+    space_warp: bool,
 }
 
 struct Session {
@@ -220,6 +224,15 @@ struct Session {
     pad: Pad,
     /// The frame between `begin_frame` and `end_frame`.
     pending: Option<(xr::FrameState, Vec<xr::View>)>,
+    /// Application SpaceWarp's images, where the runtime offers it (`warp`).
+    warp: Option<warp::SpaceWarp>,
+    /// The player's rig at the last drawn frame: LOCAL to world's rotation (the body's
+    /// turn) and the LOCAL point the game's camera sits at (the head less the lean).
+    warp_rig: Option<(Quat, Vec3)>,
+    /// From the last drawn frame to this one: where a point fixed in the world at `q`
+    /// (relative to the last frame's camera) would be now, kept at its LOCAL place,
+    /// is `rotation * q + offset` relative to this frame's camera (`space_warp_rig`).
+    warp_delta: Option<(Quat, Vec3)>,
     /// A shown-again frame's turn by the right stick since it was drawn (`turned_views`):
     /// the rotation and the head it turns about, for the quads fixed to what the image shows.
     pending_turn: Option<(Quat, Vec3)>,
@@ -466,6 +479,9 @@ fn open_instance(ctx: &Context) -> Result<(wgpu::Instance, wgpu::Adapter), Strin
     wanted.ext_performance_settings = available.ext_performance_settings;
     // The display's refresh rate the player picked (`set_refresh_rate`).
     wanted.fb_display_refresh_rate = available.fb_display_refresh_rate;
+    // Application SpaceWarp: half the frames drawn, the rest made up by the headset.
+    wanted.fb_space_warp =
+        available.fb_space_warp && std::env::var("HORIZON_XR_SPACEWARP").as_deref() != Ok("0");
     let instance = entry
         .create_instance(
             &xr::ApplicationInfo {
@@ -578,6 +594,7 @@ fn open_instance(ctx: &Context) -> Result<(wgpu::Instance, wgpu::Adapter), Strin
         device_extensions,
         session: None,
         sharpen: available.fb_composition_layer_settings,
+        space_warp: wanted.fb_space_warp,
     });
     if let Some(marker) = marker() {
         let _ = std::fs::write(marker, b"1");
@@ -772,6 +789,29 @@ fn open_vulkan_device(
     Ok(unsafe { adapter.create_device_from_hal(open, desc) }.map(|(d, q)| (d, q, handle)))
 }
 
+/// The motion vector image size the runtime recommends (`XrSystemSpaceWarpPropertiesFB`).
+fn recommended_space_warp_size(xr: &Xr) -> Option<[u32; 2]> {
+    let mut warp = xr::sys::SystemSpaceWarpPropertiesFB {
+        ty: xr::sys::SystemSpaceWarpPropertiesFB::TYPE,
+        next: std::ptr::null_mut(),
+        recommended_motion_vector_image_rect_width: 0,
+        recommended_motion_vector_image_rect_height: 0,
+    };
+    // Safety: a zeroed XrSystemProperties with its type set, and our struct chained to it.
+    let result = unsafe {
+        let mut props: xr::sys::SystemProperties = std::mem::zeroed();
+        props.ty = xr::sys::SystemProperties::TYPE;
+        props.next = (&mut warp as *mut xr::sys::SystemSpaceWarpPropertiesFB).cast();
+        (xr.instance.fp().get_system_properties)(xr.instance.as_raw(), xr.system, &mut props)
+    };
+    let size = [
+        warp.recommended_motion_vector_image_rect_width,
+        warp.recommended_motion_vector_image_rect_height,
+    ];
+    log::info!("Horizon VR: space warp recommends {size:?} ({result:?})");
+    (result == xr::sys::Result::SUCCESS && size[0] > 0 && size[1] > 0).then_some(size)
+}
+
 fn start_session(xr: &Xr, device: &wgpu::Device, raw_device: vk::Device) -> Result<Session, String> {
     // Safety: the handles are the ones OpenXR made; the queue is family 0, index 0.
     let (session, waiter, stream) = unsafe {
@@ -838,6 +878,15 @@ fn start_session(xr: &Xr, device: &wgpu::Device, raw_device: vk::Device) -> Resu
         blit::EyeChain::new(&session, device, format, size)?,
     ];
     let panel = blit::EyeChain::new(&session, device, format, size)?;
+    let warp = xr
+        .space_warp
+        .then(|| {
+            let size = recommended_space_warp_size(xr).unwrap_or([size[0] / 4, size[1] / 4]);
+            warp::SpaceWarp::new(&session, device, size)
+                .map_err(|e| log::warn!("Horizon VR: no space warp: {e}"))
+                .ok()
+        })
+        .flatten();
     let dots = [
         blit::EyeChain::new(&session, device, format, [16, 16])?,
         blit::EyeChain::new(&session, device, format, [16, 16])?,
@@ -864,6 +913,9 @@ fn start_session(xr: &Xr, device: &wgpu::Device, raw_device: vk::Device) -> Resu
         actions,
         pad: Pad::default(),
         pending: None,
+        warp,
+        warp_rig: None,
+        warp_delta: None,
         pending_turn: None,
         eye_drawn: [false; 2],
         head: None,
@@ -965,7 +1017,8 @@ pub fn begin_frame() -> Option<FrameViews> {
     // Frame pacing: between drawn frames the last one goes to the compositor again, which
     // turns it to where the head is now, so every frame shows as long as the next.
     s.pace.period_ms = state.predicted_display_period.as_nanos() as f32 / 1e6;
-    if state.should_render && s.pace.repeat_now() && !s.last_views.is_empty() {
+    // With space warp the runtime makes up the frames between drawn ones itself.
+    if state.should_render && s.warp.is_none() && s.pace.repeat_now() && !s.last_views.is_empty() {
         if let Some(queue) = s.queue.clone() {
             let (views, turn) = turned_views(s, state.predicted_display_time.as_nanos());
             s.pending = Some((state, views));
@@ -1004,6 +1057,17 @@ pub fn begin_frame() -> Option<FrameViews> {
     // Leaning moves the view, up to MAX_LEAN from where the head started.
     let lean = (head_position - anchor).clamp_length_max(MAX_LEAN);
     let body = body_rotation(s.body_yaw);
+    if s.warp.is_some() {
+        let rig = (body, head_position - lean);
+        s.warp_delta = s.warp_rig.map(|(then_body, then_at)| {
+            (body * then_body.inverse(), body * (then_at - rig.1))
+        });
+        s.warp_rig = Some(rig);
+        if let Some(warp) = &mut s.warp {
+            warp.filled = [false; 2];
+            warp.skip = s.menu_open;
+        }
+    }
     let now = state.predicted_display_time.as_nanos();
     if let Some((yaw, at, _)) = s.drawn
         && now > at
@@ -1439,6 +1503,22 @@ fn finish_frame(s: &mut Session, sharpen: bool, queue: &wgpu::Queue) {
         let mut raw = *layer.as_raw();
         if sharpen {
             raw.next = (&settings as *const xr::sys::CompositionLayerSettingsFB).cast();
+        }
+        // Space warp: each view carries its motion vectors and depth, once both eyes have
+        // them; a frame without (a menu's first, a failed fill) goes at the full rate.
+        let warp_infos = s
+            .warp
+            .as_ref()
+            .filter(|w| w.filled == [true; 2])
+            .map(|w| [w.info(0), w.info(1)]);
+        let mut raw_views = [0, 1].map(|i| *projection_views[i].as_raw());
+        if let Some(infos) = &warp_infos {
+            for i in 0..2 {
+                raw_views[i].next = (&infos[i] as *const xr::sys::CompositionLayerSpaceWarpInfoFB).cast();
+            }
+            raw.views = raw_views.as_ptr();
+            raw.view_count = 2;
+            s.stats.draws.entry("space warp").and_modify(|n| *n += 1).or_insert(1);
         }
         // Safety: `CompositionLayerBase` is the header every layer struct starts with
         // (the crate's own `Deref` makes the same cast); `raw` and `settings` outlive the
@@ -1968,6 +2048,47 @@ impl Actions {
             right: stick(1)?,
             triggers: [f(&self.triggers[0])?, f(&self.triggers[1])?],
         })
+    }
+}
+
+/// Application SpaceWarp's motion vector and depth image size, when it is on.
+pub fn space_warp_size() -> Option<[u32; 2]> {
+    xr_state().as_ref()?.session.as_ref()?.warp.as_ref().map(|w| w.size)
+}
+
+/// Space warp's depth image format.
+pub fn space_warp_depth_format() -> Option<wgpu::TextureFormat> {
+    xr_state().as_ref()?.session.as_ref()?.warp.as_ref().map(|w| w.depth_format)
+}
+
+/// From the last drawn frame to this one (`Session::warp_delta`): a point the last frame
+/// saw at `q` (relative to its camera), kept at its LOCAL place, is at `rotation * q +
+/// offset` relative to this frame's camera. `None` on the first frame or without space warp.
+pub fn space_warp_rig() -> Option<(Quat, Vec3)> {
+    xr_state().as_ref()?.session.as_ref()?.warp_delta
+}
+
+/// Eye `eye`'s motion vector and depth images for this frame, until `space_warp_release`.
+pub fn space_warp_acquire(eye: usize) -> Option<(wgpu::TextureView, wgpu::TextureView)> {
+    let mut guard = xr_state();
+    let warp = guard.as_mut()?.session.as_mut()?.warp.as_mut()?;
+    warp.acquire(eye)
+        .map_err(|e| log::warn!("Horizon VR: space warp eye {eye}: {e}"))
+        .ok()
+}
+
+/// Gives eye `eye`'s images back: `filled` when the renderer drew them, with the depth's
+/// distances at 0 and at 1 (reversed Z: far, near) and whether to skip making up frames.
+pub fn space_warp_release(eye: usize, filled: bool, range: (f32, f32), skip: bool) {
+    let mut guard = xr_state();
+    let Some(warp) = guard.as_mut().and_then(|x| x.session.as_mut()).and_then(|s| s.warp.as_mut())
+    else {
+        return;
+    };
+    warp.range = range;
+    warp.skip |= skip;
+    if let Err(e) = warp.release(eye, filled) {
+        log::warn!("Horizon VR: space warp eye {eye}: {e}");
     }
 }
 

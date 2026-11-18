@@ -63,6 +63,12 @@ fn android_main(app: AndroidApp) {
             // SAFETY: still before the game starts its threads.
             unsafe { std::env::set_var("HORIZON_XR_PERF", "boost") };
         }
+        if text.lines().any(|l| l.trim() == "spacewarp=0")
+            && std::env::var_os("HORIZON_XR_SPACEWARP").is_none()
+        {
+            // SAFETY: still before the game starts its threads.
+            unsafe { std::env::set_var("HORIZON_XR_SPACEWARP", "0") };
+        }
         if text.lines().any(|l| l.trim() == "msaa=0") && std::env::var_os("HORIZON_XR_MSAA").is_none() {
             // SAFETY: still before the game starts its threads.
             unsafe { std::env::set_var("HORIZON_XR_MSAA", "off") };

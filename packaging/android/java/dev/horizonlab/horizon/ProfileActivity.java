@@ -240,9 +240,11 @@ public class ProfileActivity extends Activity implements View.OnClickListener {
         final Button msaaButton = Ui.button(this, "", false);
         final Button scaleButton = Ui.button(this, "", false);
         final Button boostButton = Ui.button(this, "", false);
+        final Button warpButton = Ui.button(this, "", false);
         final boolean[] pace = {vrSetting("pace", 1) != 0};
         msaaOn = vrSetting("msaa", 1) != 0;
         boostOn = vrSetting("boost", 1) != 0;
+        warpOn = vrSetting("spacewarp", 1) != 0;
         vrScale = vrSetting("scale", 0);
         // One mode, Quality: a sharp image with the chunks it can draw smoothly. Applied once
         // (the game's options can still be changed in the game afterwards).
@@ -260,6 +262,7 @@ public class ProfileActivity extends Activity implements View.OnClickListener {
                 msaaButton.setText("Antialiasing MSAA: " + (msaaOn ? "4x" : "Off"));
                 scaleButton.setText(String.format(java.util.Locale.ROOT, Ui.t("Разрешение: %.2fx", "Resolution: %.2fx"), vrScale));
                 boostButton.setText(Ui.t("Ускорение: ", "Performance boost: ") + (boostOn ? "On" : "Off"));
+                warpButton.setText("SpaceWarp: " + (warpOn ? "On" : "Off"));
                 summary.setText(String.format(java.util.Locale.ROOT,
                         "Quality · %.2fx · 90 Hz · 6 chunks · anisotropic 8x%s", vrScale, msaaOn ? " · MSAA 4x" : ""));
             }
@@ -297,6 +300,13 @@ public class ProfileActivity extends Activity implements View.OnClickListener {
                 showVr.run();
             }
         });
+        warpButton.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                warpOn = !warpOn;
+                saveVr(vrScale, 90, pace[0]);
+                showVr.run();
+            }
+        });
         boostButton.setOnClickListener(new View.OnClickListener() {
             public void onClick(View v) {
                 boostOn = !boostOn;
@@ -313,6 +323,11 @@ public class ProfileActivity extends Activity implements View.OnClickListener {
         card.addView(Ui.text(this, Ui.t(
                 "Ускорение: процессор и графика шлема на максимуме. Больше кадров, шлем теплее, батарея садится быстрее.",
                 "Performance boost: the headset's CPU and GPU at their highest clocks. More frames; the headset runs warmer and the battery drains faster."),
+                12, Ui.MUTED, false));
+        card.addView(warpButton, Ui.gap(this, 6));
+        card.addView(Ui.text(this, Ui.t(
+                "SpaceWarp: игра рисует половину кадров, шлем досчитывает остальные. Плавнее при большей дальности.",
+                "SpaceWarp: the game draws half the frames and the headset makes up the rest from how everything moves. Smoother with more chunks; turn it off if you see warping."),
                 12, Ui.MUTED, false));
         card.addView(paceButton, Ui.gap(this, 6));
         card.addView(msaaButton, Ui.gap(this, 6));
@@ -560,7 +575,7 @@ public class ProfileActivity extends Activity implements View.OnClickListener {
             scale = 1.0f; hz = 72; distance = 9; simulation = 8; clouds = "\"fast\""; particles = "0"; biome = 2; entities = "1.0";
         }
         try (java.io.FileWriter w = new java.io.FileWriter(vrFile())) {
-            w.write(String.format(java.util.Locale.ROOT, "mode=%s\nscale=%.2f\nhz=%d\npace=%d\nmsaa=%d\nboost=%d\npreset=2\n", mode, scale, hz, pace ? 1 : 0, msaaOn ? 1 : 0, boostOn ? 1 : 0));
+            w.write(String.format(java.util.Locale.ROOT, "mode=%s\nscale=%.2f\nhz=%d\npace=%d\nmsaa=%d\nboost=%d\nspacewarp=%d\npreset=2\n", mode, scale, hz, pace ? 1 : 0, msaaOn ? 1 : 0, boostOn ? 1 : 0, warpOn ? 1 : 0));
         } catch (Exception ignored) {
         }
         java.util.LinkedHashMap<String, String> set = new java.util.LinkedHashMap<>();
@@ -596,6 +611,9 @@ public class ProfileActivity extends Activity implements View.OnClickListener {
         }
     }
 
+    /** VR's Application SpaceWarp (horizon-vr.txt `spacewarp=`), on by default. */
+    private boolean warpOn = true;
+
     /** VR's MSAA (horizon-vr.txt `msaa=`), on by default. */
     private boolean msaaOn = true;
 
@@ -611,7 +629,7 @@ public class ProfileActivity extends Activity implements View.OnClickListener {
 
     private void saveVr(float scale, int hz, boolean pace) {
         try (java.io.FileWriter w = new java.io.FileWriter(vrFile())) {
-            w.write(String.format(java.util.Locale.ROOT, "mode=quality\nscale=%.2f\nhz=%d\npace=%d\nmsaa=%d\nboost=%d\npreset=2\n", scale, hz, pace ? 1 : 0, msaaOn ? 1 : 0, boostOn ? 1 : 0));
+            w.write(String.format(java.util.Locale.ROOT, "mode=quality\nscale=%.2f\nhz=%d\npace=%d\nmsaa=%d\nboost=%d\nspacewarp=%d\npreset=2\n", scale, hz, pace ? 1 : 0, msaaOn ? 1 : 0, boostOn ? 1 : 0, warpOn ? 1 : 0));
         } catch (Exception ignored) {
         }
     }

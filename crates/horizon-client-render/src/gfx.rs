@@ -178,6 +178,7 @@ mod lod;
 mod xr_panel;
 mod msaa;
 mod stereo;
+mod space_warp;
 mod native_material;
 mod native_pack;
 mod native_post;
@@ -1098,6 +1099,10 @@ pub struct Renderer {
     /// eye's frame drew MSAA's part for both; whether the last world pass took stereo.
     xr_eyes: Option<[View; 2]>,
     xr_eye: usize,
+    /// VR's Application SpaceWarp, the renderer's side (`space_warp`), and the eye's world
+    /// depth after its frame, which it reads.
+    space_warp: Option<space_warp::SpaceWarp>,
+    xr_depth: Option<wgpu::TextureView>,
     stereo_drawn: bool,
     stereo_used: bool,
     /// Offscreen submissions still on the GPU: at most two frames run ahead.
@@ -4812,8 +4817,10 @@ impl Renderer {
         let xr_device = horizon_xr::active();
         #[cfg(not(target_os = "android"))]
         let xr_device = false;
-        let multi_draw = std::env::var("HORIZON_MULTI_DRAW").as_deref() != Ok("0")
-            && !xr_device
+        // `HORIZON_MULTI_DRAW=1` tries them on the headset again (newer drivers).
+        let multi_draw_env = std::env::var("HORIZON_MULTI_DRAW");
+        let multi_draw = multi_draw_env.as_deref() != Ok("0")
+            && (!xr_device || multi_draw_env.as_deref() == Ok("1"))
             && device
                 .features()
                 .contains(wgpu::Features::INDIRECT_FIRST_INSTANCE)
@@ -4949,6 +4956,8 @@ impl Renderer {
             msaa_used: false,
             xr_eyes: None,
             xr_eye: 0,
+            space_warp: None,
+            xr_depth: None,
             stereo_drawn: false,
             stereo_used: false,
             in_flight: std::collections::VecDeque::new(),
@@ -7704,6 +7713,25 @@ impl Renderer {
         };
         self.xr_hud_skip = true;
         let mut drawn = Ok(false);
+        // Application SpaceWarp (`space_warp`): this frame's moving things matched to the
+        // last drawn frame's, in play only (menus and the title go at the full rate).
+        let warp_rig = horizon_xr::space_warp_rig();
+        if self.space_warp.is_none()
+            && let Some(format) = horizon_xr::space_warp_depth_format()
+        {
+            self.space_warp = Some(space_warp::SpaceWarp::new(&self.device, format));
+        }
+        let warp_play = panel == horizon_xr::Panel::Head && !frame.title;
+        let teleport = match self.space_warp.as_mut() {
+            Some(warp) if warp_play => {
+                warp.track(frame.entities, frame.entity_motion, frame.hand, frame.camera)
+            }
+            Some(warp) => {
+                warp.reset();
+                false
+            }
+            None => false,
+        };
         // Both eyes' views, for the single-pass stereo (`stereo`) the left eye draws.
         self.xr_eyes = Some([xr_eye_view(&xr.eyes[0], far), xr_eye_view(&xr.eyes[1], far)]);
         self.stereo_drawn = false;
@@ -7722,6 +7750,16 @@ impl Renderer {
             });
             if !matches!(drawn, Ok(true)) {
                 break;
+            }
+            if warp_play
+                && let (Some(warp), Some(rig), Some(depth)) =
+                    (self.space_warp.as_mut(), warp_rig, self.xr_depth.clone())
+                && let Some((motion, warp_depth)) = horizon_xr::space_warp_acquire(i)
+            {
+                let view_proj = xr_eye_view(eye, far).view_proj(Mat4::IDENTITY);
+                warp.fill(&self.device, &self.queue, i, &depth, view_proj, rig, &motion, &warp_depth);
+                // Reversed Z: depth 0 at the far plane, 1 at the near one.
+                horizon_xr::space_warp_release(i, true, (far, NEAR_PLANE), teleport);
             }
             match &self.offscreen {
                 Some(target) => horizon_xr::submit_eye(i, &self.queue, target),
@@ -9917,6 +9955,9 @@ impl Renderer {
             Some((color, depth)) => (color, depth),
             None => (&view_target, &self.depth),
         };
+        if self.xr_view.is_some() {
+            self.xr_depth = Some(world_depth.clone());
+        }
         if culling && let Some(cull) = &mut self.cull {
             cull.bind_depth(&self.device, world_depth);
         }
