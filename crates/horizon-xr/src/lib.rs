@@ -220,6 +220,9 @@ struct Session {
     pad: Pad,
     /// The frame between `begin_frame` and `end_frame`.
     pending: Option<(xr::FrameState, Vec<xr::View>)>,
+    /// A shown-again frame's turn by the right stick since it was drawn (`turned_views`):
+    /// the rotation and the head it turns about, for the quads fixed to what the image shows.
+    pending_turn: Option<(Quat, Vec3)>,
     eye_drawn: [bool; 2],
     /// The head's pose in LOCAL space at the last `begin_frame`.
     head: Option<(Quat, Vec3)>,
@@ -861,6 +864,7 @@ fn start_session(xr: &Xr, device: &wgpu::Device, raw_device: vk::Device) -> Resu
         actions,
         pad: Pad::default(),
         pending: None,
+        pending_turn: None,
         eye_drawn: [false; 2],
         head: None,
         hand_spaces,
@@ -963,8 +967,9 @@ pub fn begin_frame() -> Option<FrameViews> {
     s.pace.period_ms = state.predicted_display_period.as_nanos() as f32 / 1e6;
     if state.should_render && s.pace.repeat_now() && !s.last_views.is_empty() {
         if let Some(queue) = s.queue.clone() {
-            let views = turned_views(s, state.predicted_display_time.as_nanos());
+            let (views, turn) = turned_views(s, state.predicted_display_time.as_nanos());
             s.pending = Some((state, views));
+            s.pending_turn = turn;
             s.eye_drawn = [true; 2];
             s.stats.draws.entry("repeated").and_modify(|n| *n += 1).or_insert(1);
             finish_frame(s, sharpen, &queue);
@@ -1113,6 +1118,7 @@ pub fn begin_frame() -> Option<FrameViews> {
     });
     s.panel_in_eyes = false;
     s.pending = Some((state, views));
+    s.pending_turn = None;
     s.eye_drawn = [false; 2];
     s.panel_drawn = None;
     Some(FrameViews {
@@ -1583,6 +1589,11 @@ fn finish_frame(s: &mut Session, sharpen: bool, queue: &wgpu::Queue) {
             .flatten();
         let wrist_layers = wrist.map(|(hotbar, left)| {
             let (at, size) = wrist_quad(left, hotbar);
+            // The arm in a shown-again image turned with it: the band turns the same way.
+            let at = match s.pending_turn {
+                Some((r, head)) => pose(r * quat(at.orientation), head + r * (vec3(at.position) - head)),
+                None => at,
+            };
             let [x, y, w, h] = hotbar.crop.map(|v| v.round() as i32);
             let crop = xr::Rect2Di {
                 offset: xr::Offset2Di { x, y },
@@ -1743,13 +1754,13 @@ pub fn look(yaw: f32) -> Option<(f32, f32)> {
 /// turns the image with it. Without this the stick's turn went on at the drawn frames' rate
 /// only (every second display frame with the frame pacing), a judder that walking straight
 /// does not have.
-fn turned_views(s: &Session, at: i64) -> Vec<xr::View> {
+fn turned_views(s: &Session, at: i64) -> (Vec<xr::View>, Option<(Quat, Vec3)>) {
     let mut views = s.last_views.clone();
     let Some((_, drawn_at, head)) = s.drawn else {
-        return views;
+        return (views, None);
     };
     if s.pad.right[0].abs() < 0.05 || s.menu_open || at <= drawn_at {
-        return views;
+        return (views, None);
     }
     let turn = (s.yaw_rate * (at - drawn_at) as f32 / 1e9).clamp(-20.0, 20.0);
     // The image shows the world turned by the body at the drawn frame; with the body turned
@@ -1760,7 +1771,7 @@ fn turned_views(s: &Session, at: i64) -> Vec<xr::View> {
         let position = head + r * (vec3(v.pose.position) - head);
         v.pose = pose(rotation, position);
     }
-    views
+    (views, Some((r, head)))
 }
 
 /// LOCAL space to world for a body facing `yaw` (Minecraft degrees).

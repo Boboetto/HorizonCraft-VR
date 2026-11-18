@@ -50,6 +50,9 @@ fn android_main(app: AndroidApp) {
     for dir in ["saves", "resourcepacks", "mods", "shaderpacks"] {
         let _ = std::fs::create_dir_all(home.join(dir));
     }
+    if let Some(internal) = app.internal_data_path() {
+        msaa_fallback(&internal, &home.join("horizon-vr.txt"));
+    }
     // The launcher's VR settings (ProfileActivity): `scale=` and `hz=` lines in horizon-vr.txt.
     if let Ok(text) = std::fs::read_to_string(home.join("horizon-vr.txt")) {
         if text.lines().any(|l| l.trim() == "pace=0") && std::env::var_os("HORIZON_XR_PACE").is_none() {
@@ -182,6 +185,38 @@ fn clear_launch_marks(app: &AndroidApp) {
         let _ = std::fs::remove_file(internal.join("launch.pending"));
         let _ = std::fs::remove_file(internal.join("vulkan-driver.pending"));
     }
+}
+
+/// MSAA that leaves the eyes black while the game runs (GitHub issue #2: Quest 3S and
+/// Quest 2, music but no picture): two starts in a row with MSAA on that end within a minute
+/// turn it off in the launcher's settings (`msaa=0` in horizon-vr.txt, which its button shows).
+fn msaa_fallback(internal: &std::path::Path, settings: &std::path::Path) {
+    let text = std::fs::read_to_string(settings).unwrap_or_default();
+    if text.lines().any(|l| l.trim() == "msaa=0") {
+        return;
+    }
+    let pending = internal.join("msaa.pending");
+    let quick_ends: u32 = std::fs::read_to_string(&pending)
+        .ok()
+        .and_then(|t| t.trim().parse().ok())
+        .unwrap_or(0);
+    if quick_ends >= 2 {
+        let mut lines: Vec<String> = text
+            .lines()
+            .filter(|l| !l.trim().starts_with("msaa="))
+            .map(str::to_owned)
+            .collect();
+        lines.push("msaa=0".to_owned());
+        let _ = std::fs::write(settings, lines.join("\n") + "\n");
+        let _ = std::fs::remove_file(&pending);
+        log::warn!("Horizon VR: MSAA off after {quick_ends} starts with it that ended within a minute");
+        return;
+    }
+    let _ = std::fs::write(&pending, format!("{}", quick_ends + 1));
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_secs(60));
+        let _ = std::fs::remove_file(pending);
+    });
 }
 
 /// Safe start: a launch that died within its first 25 seconds (with the system driver)

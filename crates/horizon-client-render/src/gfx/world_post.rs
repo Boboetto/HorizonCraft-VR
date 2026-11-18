@@ -407,7 +407,8 @@ impl Post {
             let sampled = wgpu::TextureUsages::RENDER_ATTACHMENT
                 | wgpu::TextureUsages::TEXTURE_BINDING
                 | wgpu::TextureUsages::COPY_SRC;
-            let color = make_tex("Scaled world", size, self.format, sampled)
+            // COPY_DST: VR's single-pass stereo copies each eye's layer in (`stereo`).
+            let color = make_tex("Scaled world", size, self.format, sampled | wgpu::TextureUsages::COPY_DST)
                 .create_view(&Default::default());
             // TEXTURE_BINDING: occlusion culling and TAA read it.
             let depth = make_tex(

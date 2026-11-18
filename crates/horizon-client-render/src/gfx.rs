@@ -177,6 +177,7 @@ pub mod lightning;
 mod lod;
 mod xr_panel;
 mod msaa;
+mod stereo;
 mod native_material;
 mod native_pack;
 mod native_post;
@@ -421,6 +422,11 @@ struct Globals {
     /// full (`hdr::Hdr::windows`); zero without HDR.
     hdr_windows: [[f32; 4]; 2],
     hdr_light: [f32; 4],
+    /// VR's single-pass stereo (`stereo`): each eye's `view_proj`, `inverse_view` and lens
+    /// (aspect, tan(fov/2)); the one view's in both otherwise.
+    stereo_view_proj: [[[f32; 4]; 4]; 2],
+    stereo_inverse_view: [[[f32; 4]; 4]; 2],
+    stereo_lens: [[f32; 4]; 2],
 }
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -1087,6 +1093,13 @@ pub struct Renderer {
     msaa: Option<msaa::Msaa>,
     /// Whether the last world pass took MSAA (VR's log).
     msaa_used: bool,
+    /// VR's single-pass stereo (`stereo`): both eyes' views of this frame, set by
+    /// `render_xr` around its eyes; the eye being drawn (0 left, 1 right); whether the left
+    /// eye's frame drew MSAA's part for both; whether the last world pass took stereo.
+    xr_eyes: Option<[View; 2]>,
+    xr_eye: usize,
+    stereo_drawn: bool,
+    stereo_used: bool,
     /// Offscreen submissions still on the GPU: at most two frames run ahead.
     in_flight: std::collections::VecDeque<wgpu::SubmissionIndex>,
     /// Splitscreen: the caller waits for the GPU once every player has submitted
@@ -1556,8 +1569,9 @@ pub(crate) fn msaa_samples() -> u32 {
 fn pick_msaa(adapter: &wgpu::Adapter, frame_format: wgpu::TextureFormat) -> u32 {
     #[cfg(target_os = "android")]
     let vr = horizon_xr::active();
+    // The desktop's stand-in headset (`HORIZON_FAKE_XR`) too, to check VR drawing.
     #[cfg(not(target_os = "android"))]
-    let vr = false;
+    let vr = fake_xr_fov().is_some();
     let wanted = !matches!(
         std::env::var("HORIZON_XR_MSAA").as_deref(),
         Ok("0") | Ok("off") | Ok("false")
@@ -2370,7 +2384,10 @@ async fn open_backend(
                 | wgpu::Features::VERTEX_WRITABLE_STORAGE
                 | wgpu::Features::CLEAR_TEXTURE
                 | wgpu::Features::TEXTURE_ATOMIC
-                | wgpu::Features::FLOAT32_FILTERABLE));
+                | wgpu::Features::FLOAT32_FILTERABLE
+                // VR's single-pass stereo (`stereo`).
+                | wgpu::Features::MULTIVIEW
+                | wgpu::Features::MULTISAMPLE_ARRAY));
     let driver = format!("{} {}", info.driver, info.driver_info);
     startup_step(format_args!(
         "requesting the device (driver {}) with features [{features}] and the adapter's \
@@ -2798,6 +2815,14 @@ impl Renderer {
         // The sample count the pipeline helpers below build with: 1, then `msaa` for the
         // multisampled copies of the world pass's first part (`Msaa`).
         let samples = std::cell::Cell::new(1u32);
+        // VR's single-pass stereo (`stereo`): set while the helpers below build the
+        // multiview copies of MSAA's pipelines, from the multiview shaders.
+        let multiview = std::cell::Cell::new(false);
+        let stereo_on = msaa > 1
+            && device
+                .features()
+                .contains(wgpu::Features::MULTIVIEW | wgpu::Features::MULTISAMPLE_ARRAY)
+            && stereo::wanted();
         if previous.is_none() {
             startup_step(format_args!("creating the pipelines"));
         }
@@ -2812,6 +2837,14 @@ impl Renderer {
         let shader = kept.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Horizon terrain"),
             source: wgpu::ShaderSource::Wgsl(include_str!("terrain.wgsl").into()),
+        });
+        let shader_mv = stereo_on.then(|| {
+            kept.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("Horizon terrain (multiview)"),
+                source: wgpu::ShaderSource::Wgsl(
+                    stereo::multiview_wgsl(include_str!("terrain.wgsl"), stereo::GLOBALS).into(),
+                ),
+            })
         });
         let entry = |binding, visibility, ty| wgpu::BindGroupLayoutEntry {
             binding,
@@ -2946,7 +2979,7 @@ impl Renderer {
                 label: Some(label),
                 layout: Some(layout),
                 vertex: wgpu::VertexState {
-                    module: &shader,
+                    module: if multiview.get() { shader_mv.as_ref().expect("multiview shader") } else { &shader },
                     entry_point: Some(vertex),
                     compilation_options: Default::default(),
                     buffers,
@@ -2972,7 +3005,7 @@ impl Renderer {
                     ..Default::default()
                 },
                 fragment: Some(wgpu::FragmentState {
-                    module: &shader,
+                    module: if multiview.get() { shader_mv.as_ref().expect("multiview shader") } else { &shader },
                     entry_point: Some(fragment),
                     compilation_options: wgpu::PipelineCompilationOptions {
                         constants,
@@ -2984,7 +3017,7 @@ impl Renderer {
                         write_mask: wgpu::ColorWrites::ALL,
                     })],
                 }),
-                multiview_mask: None,
+                multiview_mask: multiview.get().then(|| std::num::NonZeroU32::new(3).expect("two views")),
                 cache: None,
             })
         };
@@ -3633,6 +3666,22 @@ impl Renderer {
             label: Some("Horizon static block entities"),
             source: wgpu::ShaderSource::Wgsl(static_entity_shader().into()),
         });
+        let entity_shader_mv = stereo_on.then(|| {
+            kept.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("Horizon entities (multiview)"),
+                source: wgpu::ShaderSource::Wgsl(
+                    stereo::multiview_wgsl(&self::entity_shader(), stereo::GLOBALS).into(),
+                ),
+            })
+        });
+        let static_entity_shader_mv = stereo_on.then(|| {
+            device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("Horizon static block entities (multiview)"),
+                source: wgpu::ShaderSource::Wgsl(
+                    stereo::multiview_wgsl(&self::static_entity_shader(), stereo::GLOBALS).into(),
+                ),
+            })
+        });
         let entity_bindings = kept.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Entity bindings"),
             entries: &[
@@ -3894,7 +3943,7 @@ impl Renderer {
                     &entity_layout
                 }),
                 vertex: wgpu::VertexState {
-                    module: &entity_shader,
+                    module: if multiview.get() { entity_shader_mv.as_ref().expect("multiview shader") } else { &entity_shader },
                     entry_point: Some(if clouds { "vs_cloud" } else { "vs_entity" }),
                     compilation_options: Default::default(),
                     buffers: &entity_vertex,
@@ -3915,7 +3964,7 @@ impl Renderer {
                     ..Default::default()
                 },
                 fragment: Some(wgpu::FragmentState {
-                    module: &entity_shader,
+                    module: if multiview.get() { entity_shader_mv.as_ref().expect("multiview shader") } else { &entity_shader },
                     entry_point: Some(fragment),
                     compilation_options: Default::default(),
                     targets: &[Some(wgpu::ColorTargetState {
@@ -3924,7 +3973,7 @@ impl Renderer {
                         write_mask,
                     })],
                 }),
-                multiview_mask: None,
+                multiview_mask: multiview.get().then(|| std::num::NonZeroU32::new(3).expect("two views")),
                 cache: None,
             })
         };
@@ -4085,7 +4134,7 @@ impl Renderer {
                 label: Some("Static block entities"),
                 layout: Some(&static_entity_layout),
                 vertex: wgpu::VertexState {
-                    module: &static_entity_shader,
+                    module: if multiview.get() { static_entity_shader_mv.as_ref().expect("multiview shader") } else { &static_entity_shader },
                     entry_point: Some("vs_static_entity"),
                     compilation_options: Default::default(),
                     buffers: &static_entity_vertex,
@@ -4103,7 +4152,7 @@ impl Renderer {
                 ..Default::default()
             },
                 fragment: Some(wgpu::FragmentState {
-                    module: &static_entity_shader,
+                    module: if multiview.get() { static_entity_shader_mv.as_ref().expect("multiview shader") } else { &static_entity_shader },
                     entry_point: Some("fs_entity"),
                     compilation_options: Default::default(),
                     targets: &[Some(wgpu::ColorTargetState {
@@ -4115,7 +4164,7 @@ impl Renderer {
                         write_mask: wgpu::ColorWrites::ALL,
                     })],
                 }),
-                multiview_mask: None,
+                multiview_mask: multiview.get().then(|| std::num::NonZeroU32::new(3).expect("two views")),
                 cache: None,
             })
         };
@@ -4272,7 +4321,7 @@ impl Renderer {
             label: Some("Celestial bodies"),
             layout: Some(&entity_layout),
             vertex: wgpu::VertexState {
-                module: &entity_shader,
+                module: if multiview.get() { entity_shader_mv.as_ref().expect("multiview shader") } else { &entity_shader },
                 entry_point: Some("vs_entity"),
                 compilation_options: Default::default(),
                 buffers: &entity_vertex,
@@ -4293,7 +4342,7 @@ impl Renderer {
                 ..Default::default()
             },
             fragment: Some(wgpu::FragmentState {
-                module: &entity_shader,
+                module: if multiview.get() { entity_shader_mv.as_ref().expect("multiview shader") } else { &entity_shader },
                 entry_point: Some("fs_sky_celestial"),
                 compilation_options: Default::default(),
                 targets: &[Some(wgpu::ColorTargetState {
@@ -4317,7 +4366,7 @@ impl Renderer {
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
             }),
-            multiview_mask: None,
+            multiview_mask: multiview.get().then(|| std::num::NonZeroU32::new(3).expect("two views")),
             cache: None,
         })
         };
@@ -4684,6 +4733,7 @@ impl Renderer {
         // VR's MSAA: the world pass's first part again, multisampled.
         let msaa_set = (msaa > 1).then(|| {
             samples.set(msaa);
+            let build_set = || {
             let (solid, solid_opaque, solid_cutout) = match &flat {
                 Some(f) => {
                     let pulled_layout = kept.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -4719,7 +4769,7 @@ impl Renderer {
                     ),
                 ),
             };
-            let pipelines = msaa::Pipelines {
+            msaa::Pipelines {
                 sky_base: make_sky_base(),
                 sunrise: make_sunrise(),
                 dark_disc: make_dark_disc(),
@@ -4729,9 +4779,18 @@ impl Renderer {
                 solid,
                 solid_opaque,
                 solid_cutout,
+            }
             };
+            let pipelines = build_set();
+            // VR's single-pass stereo: the same again, drawing both eyes' layers.
+            let stereo_pipelines = stereo_on.then(|| {
+                multiview.set(true);
+                let set = build_set();
+                multiview.set(false);
+                set
+            });
             samples.set(1);
-            msaa::Msaa::new(&device, msaa, pipelines)
+            msaa::Msaa::new(&device, msaa, pipelines, stereo_pipelines)
         });
         // The solid quads in the compact layout, while no shader pack reads the arena
         // (`follow_packed_layout`).
@@ -4888,6 +4947,10 @@ impl Renderer {
             xr_panel: None,
             msaa: msaa_set,
             msaa_used: false,
+            xr_eyes: None,
+            xr_eye: 0,
+            stereo_drawn: false,
+            stereo_used: false,
             in_flight: std::collections::VecDeque::new(),
             paced_elsewhere: false,
             first_frame: if previous.is_none() {
@@ -7590,15 +7653,23 @@ impl Renderer {
         // Both eyes, the left first, as `render_xr` draws them: the frame shows the left.
         let right_fov = [-fov[1], -fov[0], fov[2], fov[3]];
         let mut drawn = Ok(false);
-        for (x, lens) in [(-0.032, fov), (0.032, right_fov)] {
-            let view = eye_view(rotation, rotation * Vec3::new(x, 0.0, 0.0), lens, far);
+        let eyes = [(-0.032, fov), (0.032, right_fov)]
+            .map(|(x, lens)| eye_view(rotation, rotation * Vec3::new(x, 0.0, 0.0), lens, far));
+        let one_eye = std::env::var_os("HORIZON_FAKE_XR_ONE_EYE").is_some();
+        self.xr_eyes = (!one_eye).then_some(eyes);
+        self.stereo_drawn = false;
+        for (i, view) in eyes.into_iter().enumerate() {
+            self.xr_eye = i;
             self.xr_view = Some(ViewSet::with_cull(view, cull));
             drawn = self.render_screen(frame);
-            if std::env::var_os("HORIZON_FAKE_XR_ONE_EYE").is_some() {
+            // HORIZON_FAKE_XR_LEFT (checks): the frame shows the left eye, drawn as with both.
+            if one_eye || std::env::var_os("HORIZON_FAKE_XR_LEFT").is_some() {
                 break;
             }
         }
         self.xr_view = None;
+        self.xr_eyes = None;
+        self.xr_eye = 0;
         drawn
     }
     /// VR: waits for the headset's frame, draws `frame` once per eye and hands each
@@ -7633,7 +7704,11 @@ impl Renderer {
         };
         self.xr_hud_skip = true;
         let mut drawn = Ok(false);
+        // Both eyes' views, for the single-pass stereo (`stereo`) the left eye draws.
+        self.xr_eyes = Some([xr_eye_view(&xr.eyes[0], far), xr_eye_view(&xr.eyes[1], far)]);
+        self.stereo_drawn = false;
         for (i, eye) in xr.eyes.iter().enumerate() {
+            self.xr_eye = i;
             self.xr_view = Some(ViewSet::with_cull(xr_eye_view(eye, far), cull));
             self.xr_eye_fov = Some(eye.fov);
             if i == 0 {
@@ -7655,6 +7730,8 @@ impl Renderer {
         }
         self.xr_hud_skip = false;
         self.xr_eye_fov = None;
+        self.xr_eyes = None;
+        self.xr_eye = 0;
         if matches!(drawn, Ok(true)) {
             self.xr_draw_hud(frame, panel);
         }
@@ -7663,7 +7740,8 @@ impl Renderer {
         horizon_xr::note_renderer(|| {
             format!(
                 "sections resident {}, drawn {}, draws {}, draw calls {}, indices {}k, culled {:?}, GPU \
-                 culling {}, MSAA {}, size {}x{}; slowest passes (ms per eye) {}",
+                 culling {}, MSAA {}, stereo {}, size {}x{}; slowest passes (ms per eye, World \
+                 for both with stereo) {}",
                 self.resident_sections(),
                 self.drawn_sections,
                 self.section_draws,
@@ -7672,6 +7750,7 @@ impl Renderer {
                 self.culled_sections(),
                 self.gpu_culling(),
                 if self.msaa_used { msaa_samples() } else { 0 },
+                self.stereo_used,
                 self.config.width,
                 self.config.height,
                 {
@@ -7687,9 +7766,16 @@ impl Renderer {
             )
         });
         // Both eyes' GPU time, for the headset's frame pacing.
-        let eye_ms: f32 = self.own_pass_times().iter().map(|(_, ms)| ms).sum();
+        // With stereo the World pass runs once for both eyes, the rest once per eye.
+        let passes = self.own_pass_times();
+        let eye_ms: f32 = passes.iter().map(|(_, ms)| ms).sum();
+        let once: f32 = passes
+            .iter()
+            .filter(|(name, _)| self.stereo_used && name == "World")
+            .map(|(_, ms)| ms)
+            .sum();
         if eye_ms > 0.0 {
-            horizon_xr::note_gpu_ms(eye_ms * 2.0);
+            horizon_xr::note_gpu_ms(eye_ms * 2.0 - once);
         }
         horizon_xr::end_frame(&self.queue);
         drawn
@@ -8269,6 +8355,18 @@ impl Renderer {
                 if self.hdr.is_some() { 1.0 } else { 0.0 },
                 0.0,
             ],
+            stereo_view_proj: match self.xr_eyes {
+                Some(eyes) => eyes.map(|e| e.view_proj(Mat4::IDENTITY).to_cols_array_2d()),
+                None => [jittered.to_cols_array_2d(); 2],
+            },
+            stereo_inverse_view: match self.xr_eyes {
+                Some(eyes) => eyes.map(|e| e.view.inverse().to_cols_array_2d()),
+                None => [view.inverse().to_cols_array_2d(); 2],
+            },
+            stereo_lens: match self.xr_eyes {
+                Some(eyes) => eyes.map(|e| [e.aspect, e.tan_half_fov, 0.0, 0.0]),
+                None => [[views.primary().aspect, views.primary().tan_half_fov, 0.0, 0.0]; 2],
+            },
         };
         self.uploads
             .buffer(&mut encoder, &self.globals, 0, bytemuck::bytes_of(&globals));
@@ -9533,6 +9631,7 @@ impl Renderer {
                 &mut self.uploads,
                 &mut encoder,
                 jittered * rotation,
+                self.xr_eyes.map(|eyes| eyes.map(|e| e.view_proj(Mat4::IDENTITY) * rotation)),
                 brightness,
             );
         }
@@ -10262,19 +10361,54 @@ impl Renderer {
             && !hdr
             && !native_sky_pass
             && shadow_view.is_none();
+        // VR's single-pass stereo (`stereo`): the left eye's frame draws MSAA's part for
+        // both eyes, the right eye's takes its layer. Not with the sunrise fan, whose clip
+        // positions the CPU makes for one view.
+        let stereo_frame = msaa_frame
+            && self.xr_eyes.is_some()
+            && frame.sky.sunrise_color[3] <= 0.001
+            && self.msaa.as_ref().is_some_and(|m| m.stereo.is_some());
+        let stereo_draw = stereo_frame && self.xr_eye == 0;
+        let stereo_take = stereo_frame && self.xr_eye == 1 && self.stereo_drawn;
+        if self.xr_eye == 0 {
+            self.stereo_drawn = false;
+        }
         if msaa_frame && let Some(ms) = self.msaa.as_mut() {
             let t = world_depth.texture();
-            ms.fit(&self.device, [t.width(), t.height()], world_view.texture().format());
+            if stereo_draw || stereo_take {
+                ms.fit_stereo(&self.device, [t.width(), t.height()], world_view.texture().format());
+            } else {
+                ms.fit(&self.device, [t.width(), t.height()], world_view.texture().format());
+            }
         }
         self.msaa_used = msaa_frame;
+        self.stereo_used = stereo_draw || stereo_take;
         let ms = self.msaa.as_ref().filter(|_| msaa_frame);
-        let ms_views = ms.and_then(|m| m.views());
+        let stereo_views = ms.filter(|_| stereo_draw || stereo_take).and_then(|m| m.stereo_views());
+        let ms_views = match stereo_views {
+            Some((color, depth, _)) => Some((color, depth)),
+            None => ms.and_then(|m| m.views()),
+        };
         let ms = ms.filter(|_| ms_views.is_some());
-        let msp = ms.map(|m| &m.pipelines);
+        let msp = match stereo_views {
+            Some(_) => ms.and_then(|m| m.stereo.as_ref()),
+            None => ms.map(|m| &m.pipelines),
+        };
+        let stereo_draw = stereo_draw && stereo_views.is_some();
+        let stereo_take = stereo_take && stereo_views.is_some();
+        if stereo_draw {
+            static LOGGED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+            if !LOGGED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                log::info!("Horizon VR: single-pass stereo: both eyes' sky, terrain and entities in one pass");
+            }
+        }
         {
             let attachments = [Some(wgpu::RenderPassColorAttachment {
                 view: ms_views.map_or(world_view, |v| v.0),
-                resolve_target: ms_views.map(|_| world_view),
+                resolve_target: match stereo_views {
+                    Some((_, _, resolved)) => Some(resolved),
+                    None => ms_views.map(|_| world_view),
+                },
                 depth_slice: None,
                 ops: wgpu::Operations {
                     load: if native_sky_pass {
@@ -10289,8 +10423,31 @@ impl Renderer {
                     },
                 },
             })];
+            // The right eye of a stereo frame: its layer of what the left eye's frame drew,
+            // then the rest of its world as after MSAA's part.
+            let mut pass = if stereo_take && let Some(ms) = ms {
+                ms.take_stereo_layer(
+                    &mut encoder,
+                    1,
+                    world_view,
+                    world_depth,
+                    self.own_timing.as_mut().and_then(|t| t.writes("MSAA depth copy")),
+                );
+                let mut pass = world_pass_after_culling(
+                    &mut encoder,
+                    world_view,
+                    world_depth,
+                    keep_depth,
+                    self.own_timing.as_mut(),
+                    "World after MSAA",
+                );
+                pass.set_bind_group(0, &self.group, &[]);
+                pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
+                pass
+            } else {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Horizon world"),
+                label: Some(if stereo_draw { "Horizon world (both eyes)" } else { "Horizon world" }),
+                multiview_mask: stereo_draw.then(|| std::num::NonZeroU32::new(3).expect("two views")),
                 timestamp_writes: self.own_timing.as_mut().and_then(|t| t.writes("World")),
                 color_attachments: &attachments,
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
@@ -10379,7 +10536,11 @@ impl Renderer {
                     .as_ref()
                     .is_some_and(|n| n.sky.is_some() && !n.vanilla_stars);
                 if !frame.title && frame.stars.is_some() && !pack_draws_sky && !own_stars {
-                    self.stars.draw_ms(&mut pass, msp.is_some());
+                    if stereo_draw {
+                        self.stars.draw_stereo(&mut pass);
+                    } else {
+                        self.stars.draw_ms(&mut pass, msp.is_some());
+                    }
                     pass.set_bind_group(0, &self.group, &[]);
                 }
                 if !frame.title && frame.dark_disc && !pack_draws_sky {
@@ -10738,11 +10899,22 @@ impl Renderer {
             // sample goes to the world's depth, and the rest of the world draws on over both.
             if let Some(ms) = ms {
                 drop(pass);
-                ms.copy_depth(
-                    &mut encoder,
-                    world_depth,
-                    self.own_timing.as_mut().and_then(|t| t.writes("MSAA depth copy")),
-                );
+                if stereo_draw {
+                    ms.take_stereo_layer(
+                        &mut encoder,
+                        0,
+                        world_view,
+                        world_depth,
+                        self.own_timing.as_mut().and_then(|t| t.writes("MSAA depth copy")),
+                    );
+                    self.stereo_drawn = true;
+                } else {
+                    ms.copy_depth(
+                        &mut encoder,
+                        world_depth,
+                        self.own_timing.as_mut().and_then(|t| t.writes("MSAA depth copy")),
+                    );
+                }
                 pass = world_pass_after_culling(
                     &mut encoder,
                     world_view,
@@ -10754,6 +10926,8 @@ impl Renderer {
                 pass.set_bind_group(0, &self.group, &[]);
                 pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
             }
+            pass
+            };
             if text_quads > 0 && !oit_on {
                 pass.set_pipeline(&self.text_polygon_offset_pipeline);
                 pass.set_bind_group(0, &self.entity_group, &[]);
@@ -12647,8 +12821,9 @@ fn eye_view(rotation: glam::Quat, offset: Vec3, fov: [f32; 4], far: f32) -> View
 
 /// VR: sections draw whole, in one pass and without splitting them by the sides facing
 /// the eye. Per-section draws are all the headset's GPU has (no multi-draw), and with two
-/// eyes the split's thousands of draws cost the Quest more than the faces it saves.
-/// `HORIZON_XR_SPLIT=1` brings the split back, for A/B checks.
+/// eyes the split's thousands of draws cost the Quest more than the faces it saves
+/// (measured again 2026-11-18: split 1570 draws, 3.0M indices, 15.4 ms per eye; whole
+/// 615 draws, 3.6M indices, 11.5 ms). `HORIZON_XR_SPLIT=1` brings the split back.
 fn xr_whole_sections() -> bool {
     #[cfg(target_os = "android")]
     return horizon_xr::active() && std::env::var("HORIZON_XR_SPLIT").as_deref() != Ok("1");

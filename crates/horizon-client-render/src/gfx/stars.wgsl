@@ -4,6 +4,8 @@ struct Stars {
     clip_from_sky: mat4x4<f32>,
     // starBrightness in every channel (RenderSystem.setShaderColor).
     color: vec4<f32>,
+    // Each eye's clip_from_sky, for VR's single-pass stereo (gfx/stereo.rs).
+    clip_from_sky_eyes: array<mat4x4<f32>, 2>,
 }
 @group(0) @binding(0) var<uniform> stars: Stars;
 

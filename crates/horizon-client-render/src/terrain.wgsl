@@ -41,6 +41,11 @@ struct Globals {
     // HDR lighting: x how strongly the sky lights the world now (`Sky::sky_light_factor`),
     // y what the sky and fog get: the same, but none under water; z 1 with HDR output on.
     hdr_light: vec4<f32>,
+    // VR's single-pass stereo (gfx/stereo.rs): each eye's view_proj, inverse_view and
+    // lens (x the aspect, y tan(fov/2), misc.z and misc.w's), both the one view's otherwise.
+    stereo_view_proj: array<mat4x4<f32>, 2>,
+    stereo_inverse_view: array<mat4x4<f32>, 2>,
+    stereo_lens: array<vec4<f32>, 2>,
 }
 @group(0) @binding(0) var<uniform> globals: Globals;
 @group(0) @binding(1) var sprites: texture_2d_array<f32>;

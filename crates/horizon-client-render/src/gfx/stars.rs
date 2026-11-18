@@ -46,12 +46,16 @@ pub fn star_triangles() -> Vec<[f32; 3]> {
 struct Uniform {
     clip_from_sky: [[f32; 4]; 4],
     color: [f32; 4],
+    /// Each eye's `clip_from_sky`, for VR's single-pass stereo (`super::stereo`).
+    clip_from_sky_eyes: [[[f32; 4]; 4]; 2],
 }
 
 pub(super) struct Stars {
     pipeline: wgpu::RenderPipeline,
     /// The multisampled copy for VR's MSAA world pass (`super::msaa`).
     msaa: Option<wgpu::RenderPipeline>,
+    /// The multiview copy of `msaa`, drawing both eyes (`super::stereo`).
+    stereo: Option<wgpu::RenderPipeline>,
     group: wgpu::BindGroup,
     uniform: wgpu::Buffer,
     vertices: wgpu::Buffer,
@@ -103,7 +107,20 @@ impl Stars {
             ..Default::default()
         });
         let attributes = wgpu::vertex_attr_array![0 => Float32x3];
-        let build = |samples: u32| device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        let stereo_shader = device
+            .features()
+            .contains(wgpu::Features::MULTIVIEW | wgpu::Features::MULTISAMPLE_ARRAY)
+            .then(|| super::stereo::wanted())
+            .filter(|&on| on)
+            .map(|_| {
+                device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                    label: Some("Stars (multiview)"),
+                    source: wgpu::ShaderSource::Wgsl(
+                        super::stereo::multiview_wgsl(include_str!("stars.wgsl"), super::stereo::STARS).into(),
+                    ),
+                })
+            });
+        let build_with = |samples: u32, shader: &wgpu::ShaderModule, views: Option<std::num::NonZeroU32>| device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("Stars"),
             layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState {
@@ -150,15 +167,20 @@ impl Stars {
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
             }),
-            multiview_mask: None,
+            multiview_mask: views,
             cache: None,
         });
+        let build = |samples: u32| build_with(samples, &shader, None);
         let pipeline = build(1);
         let samples = super::msaa_samples();
         let msaa = (samples > 1).then(|| build(samples));
+        let stereo = stereo_shader
+            .filter(|_| samples > 1)
+            .map(|s| build_with(samples, &s, std::num::NonZeroU32::new(3)));
         Self {
             pipeline,
             msaa,
+            stereo,
             group,
             uniform,
             vertices,
@@ -173,12 +195,14 @@ impl Stars {
         uploads: &mut super::upload::Uploads,
         encoder: &mut wgpu::CommandEncoder,
         clip_from_sky: Mat4,
+        eyes: Option<[Mat4; 2]>,
         brightness: f32,
     ) {
         let b = brightness.clamp(0.0, 1.0);
         let uniform = Uniform {
             clip_from_sky: clip_from_sky.to_cols_array_2d(),
             color: [b; 4],
+            clip_from_sky_eyes: eyes.unwrap_or([clip_from_sky; 2]).map(|m| m.to_cols_array_2d()),
         };
         uploads.buffer(encoder, &self.uniform, 0, bytemuck::bytes_of(&uniform));
     }
@@ -190,6 +214,17 @@ impl Stars {
     /// `draw`, into the multisampled targets when `msaa`.
     pub(super) fn draw_ms(&self, pass: &mut wgpu::RenderPass<'_>, msaa: bool) {
         let pipeline = self.msaa.as_ref().filter(|_| msaa).unwrap_or(&self.pipeline);
+        self.draw_with(pass, pipeline);
+    }
+
+    /// `draw`, into both eyes' layers of VR's stereo pass (`super::stereo`).
+    pub(super) fn draw_stereo(&self, pass: &mut wgpu::RenderPass<'_>) {
+        if let Some(pipeline) = &self.stereo {
+            self.draw_with(pass, pipeline);
+        }
+    }
+
+    fn draw_with(&self, pass: &mut wgpu::RenderPass<'_>, pipeline: &wgpu::RenderPipeline) {
         pass.set_pipeline(pipeline);
         pass.set_bind_group(0, &self.group, &[]);
         pass.set_vertex_buffer(0, self.vertices.slice(..));
