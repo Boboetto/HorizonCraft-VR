@@ -4678,6 +4678,7 @@ impl Renderer {
             let info = adapter.get_info();
             let min_sections = if flat::is_broken_intel_vulkan(&info)
                 || std::env::var("HORIZON_FLAT_DRAWS").as_deref() == Ok("1")
+                || xr_flat_draws()
             {
                 0
             } else if flat::for_vanilla(&info) {
@@ -4739,7 +4740,7 @@ impl Renderer {
         let msaa_set = (msaa > 1).then(|| {
             samples.set(msaa);
             let build_set = || {
-            let (solid, solid_opaque, solid_cutout) = match &flat {
+            let (solid, solid_opaque, solid_cutout, flat_set) = match &flat {
                 Some(f) => {
                     let pulled_layout = kept.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                         label: Some("Horizon terrain layout (pulled)"),
@@ -4750,10 +4751,27 @@ impl Renderer {
                     let solid = |label: &str, vertex: &str, fragment: &str| {
                         solid_in(&pulled_layout, label, vertex, fragment, &origins)
                     };
+                    // VR's flat draws (`xr_flat_draws`): no vertex buffers, origins by id.
+                    let flat_solid = |label: &str, vertex: &str, fragment: &str| {
+                        solid_in(&pulled_layout, label, vertex, fragment, &[])
+                    };
                     (
                         solid("Terrain solid", "vs_section", "fs_solid"),
                         solid("Terrain solid opaque", "vs_section_opaque", "fs_opaque"),
                         solid("Terrain solid cutout", "vs_section_cutout", "fs_solid"),
+                        Some([
+                            flat_solid("Terrain solid (flat)", "vs_section_flat", "fs_solid"),
+                            flat_solid(
+                                "Terrain solid opaque (flat)",
+                                "vs_section_flat_opaque",
+                                "fs_opaque",
+                            ),
+                            flat_solid(
+                                "Terrain solid cutout (flat)",
+                                "vs_section_flat_cutout",
+                                "fs_solid",
+                            ),
+                        ]),
                     )
                 }
                 None => (
@@ -4772,6 +4790,7 @@ impl Renderer {
                         "fs_solid",
                         &terrain_buffers,
                     ),
+                    None,
                 ),
             };
             msaa::Pipelines {
@@ -4784,6 +4803,7 @@ impl Renderer {
                 solid,
                 solid_opaque,
                 solid_cutout,
+                flat: flat_set,
             }
             };
             let pipelines = build_set();
@@ -10398,7 +10418,8 @@ impl Renderer {
             && !gpu_occluding
             && !vis_frame
             && !oit_on
-            && !flat_frame
+            // Flat frames with the multisampled flat pipelines (VR, `xr_flat_draws`).
+            && (!flat_frame || self.msaa.as_ref().is_some_and(|m| m.pipelines.flat.is_some()))
             && !hdr
             && !native_sky_pass
             && shadow_view.is_none();
@@ -10673,8 +10694,31 @@ impl Renderer {
                     let phase2_split = phase2_split - flat.phase1_calls;
                     let phase2_calls = flat.solid_calls - flat.phase1_calls;
                     type Calls = std::ops::Range<usize>;
+                    // VR's MSAA (and its stereo copies): the multisampled flat pipelines.
+                    let ms_flat = msp.and_then(|m| m.flat.as_ref());
+                    if ms_flat.is_some() {
+                        static LOGGED: std::sync::atomic::AtomicBool =
+                            std::sync::atomic::AtomicBool::new(false);
+                        if !LOGGED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                            log::info!(
+                                "Horizon VR: flat terrain draws with MSAA ({} calls for {} sections' draws)",
+                                flat.solid_calls,
+                                solid_draws
+                            );
+                        }
+                    }
                     let passes: &[(&wgpu::RenderPipeline, Calls, Calls)] = match pack_flat {
                         Some(p) => &[(&p.0, 0..flat.phase1_calls, 0..phase2_calls)],
+                        None if split_solid && ms_flat.is_some() => {
+                            let m = ms_flat.expect("checked");
+                            &[
+                                (m[1].get(hdr), 0..opaque, 0..phase2_split),
+                                (m[2].get(hdr), cutout..flat.phase1_calls, phase2_split..phase2_calls),
+                            ]
+                        }
+                        None if ms_flat.is_some() => {
+                            &[(ms_flat.expect("checked")[0].get(hdr), 0..flat.phase1_calls, 0..phase2_calls)]
+                        }
                         None if split_solid => &[
                             (flat.solid_opaque.get(hdr), 0..opaque, 0..phase2_split),
                             (
@@ -12870,6 +12914,19 @@ fn xr_whole_sections() -> bool {
     return horizon_xr::active() && std::env::var("HORIZON_XR_SPLIT").as_deref() != Ok("1");
     #[cfg(not(target_os = "android"))]
     false
+}
+
+/// VR: solid terrain drawn flat (`flat`), a few draws per arena page instead of one per
+/// section: the Quest's Adreno spends most of the world pass on the draws themselves
+/// (measured 2026-11-19: ~550 sections, ~1100 draws, ~20 ms for both eyes) and draws no
+/// terrain from indirect multi-draws. `HORIZON_XR_FLAT=0` keeps one draw per section.
+fn xr_flat_draws() -> bool {
+    #[cfg(target_os = "android")]
+    return horizon_xr::active() && std::env::var("HORIZON_XR_FLAT").as_deref() != Ok("0");
+    #[cfg(not(target_os = "android"))]
+    {
+        fake_xr_fov().is_some() && std::env::var("HORIZON_XR_FLAT").as_deref() == Ok("1")
+    }
 }
 
 /// `HORIZON_FAKE_XR`: a Quest 3 left eye's lens (`1`), or four tangents

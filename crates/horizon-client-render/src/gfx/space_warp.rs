@@ -38,7 +38,8 @@ struct Params {
     // x: 1 flips the vectors' y to Vulkan's NDC; y: the vectors' scale; zw: the eye
     // depth's size.
     misc: vec4<f32>,
-    // xy: the motion image's size.
+    // xy: the motion image's size; z: the footprint's depth (0 nearest, 1 centre, 2
+    // farthest; `HORIZON_XR_SW_DEPTH`).
     target_size: vec4<f32>,
 };
 @group(0) @binding(0) var<uniform> params: Params;
@@ -83,13 +84,23 @@ fn footprint_depth(uv: vec2<f32>) -> f32 {
     let size = params.misc.zw;
     let step = size / params.target_size.xy;
     let corner = uv * size - step * 0.5;
+    let mode = params.target_size.z;
+    if mode > 0.5 && mode < 1.5 {
+        return textureLoad(depth, vec2<i32>(clamp(uv * size, vec2<f32>(0.0), size - 1.0)), 0);
+    }
     var nearest = 0.0;
+    var farthest = 1.0;
     for (var y = 0; y < 4; y++) {
         for (var x = 0; x < 4; x++) {
             let at = corner + step * (vec2<f32>(f32(x), f32(y)) + 0.5) / 4.0;
             let texel = vec2<i32>(clamp(at, vec2<f32>(0.0), size - 1.0));
-            nearest = max(nearest, textureLoad(depth, texel, 0));
+            let d = textureLoad(depth, texel, 0);
+            nearest = max(nearest, d);
+            farthest = min(farthest, d);
         }
+    }
+    if mode > 1.5 {
+        return farthest;
     }
     return nearest;
 }
@@ -167,6 +178,8 @@ pub(super) struct SpaceWarp {
     moved: Vec3,
     flip_y: bool,
     scale: f32,
+    /// `HORIZON_XR_SW_DEPTH`: `centre` or `far` instead of the footprint's nearest depth.
+    depth_mode: f32,
 }
 
 impl SpaceWarp {
@@ -293,6 +306,11 @@ impl SpaceWarp {
                 .ok()
                 .and_then(|v| v.trim().parse().ok())
                 .unwrap_or(1.0),
+            depth_mode: match std::env::var("HORIZON_XR_SW_DEPTH").as_deref() {
+                Ok("centre") | Ok("center") => 1.0,
+                Ok("far") => 2.0,
+                _ => 0.0,
+            },
         }
     }
 
@@ -386,7 +404,7 @@ impl SpaceWarp {
             ],
             target_size: {
                 let t = motion.texture().size();
-                [t.width as f32, t.height as f32, 0.0, 0.0]
+                [t.width as f32, t.height as f32, self.depth_mode, 0.0]
             },
         };
         queue.write_buffer(&self.params[eye], 0, bytemuck::bytes_of(&params));

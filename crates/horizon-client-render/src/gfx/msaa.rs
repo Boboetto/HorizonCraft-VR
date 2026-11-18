@@ -32,6 +32,8 @@ pub(super) struct Pipelines {
     pub solid: SolidPipeline,
     pub solid_opaque: SolidPipeline,
     pub solid_cutout: SolidPipeline,
+    /// The flat solid draws' (`super::flat`): whole, opaque, cutout.
+    pub flat: Option<[SolidPipeline; 3]>,
 }
 
 struct Targets {
