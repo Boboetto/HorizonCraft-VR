@@ -238,10 +238,12 @@ public class ProfileActivity extends Activity implements View.OnClickListener {
                 13, Ui.WARN, false));
         final Button resetButton = Ui.button(this, Ui.t("Вернуть рекомендуемые настройки", "Restore recommended settings"), true);
         card.addView(resetButton, Ui.gap(this, 8));
+        final Button paceButton = Ui.button(this, "", false);
         final Button msaaButton = Ui.button(this, "", false);
         final Button scaleButton = Ui.button(this, "", false);
         final Button boostButton = Ui.button(this, "", false);
         final Button warpButton = Ui.button(this, "", false);
+        final boolean[] pace = {vrSetting("pace", 1) != 0};
         msaaOn = vrSetting("msaa", 1) != 0;
         boostOn = vrSetting("boost", 1) != 0;
         warpOn = vrSetting("spacewarp", 1) != 0;
@@ -253,11 +255,12 @@ public class ProfileActivity extends Activity implements View.OnClickListener {
         // (`preset`: the defaults' version; an older file takes the new ones once.)
         if (!"quality".equals(vrMode()) || vrSetting("preset", 0) < 4) {
             vrScale = qualityScale();
-            applyMode("quality");
+            applyMode("quality", pace[0]);
         }
         final TextView summary = Ui.text(this, "", 13, Ui.TEXT, true);
         final Runnable showVr = new Runnable() {
             public void run() {
+                paceButton.setText(Ui.t("Ровные кадры: ", "Frame pacing: ") + (pace[0] ? "Auto" : "Off"));
                 msaaButton.setText("Antialiasing MSAA: " + (msaaOn ? "4x" : "Off"));
                 scaleButton.setText(String.format(java.util.Locale.ROOT, Ui.t("Разрешение: %.2fx", "Resolution: %.2fx"), vrScale));
                 boostButton.setText(Ui.t("Ускорение: ", "Performance boost: ") + (boostOn ? "On" : "Off"));
@@ -272,10 +275,18 @@ public class ProfileActivity extends Activity implements View.OnClickListener {
                 msaaOn = true;
                 boostOn = true;
                 warpOn = true;
+                pace[0] = true;
                 vrScale = qualityScale();
-                applyMode("quality");
+                applyMode("quality", true);
                 showVr.run();
                 resetButton.setText(Ui.t("Рекомендуемые настройки ✓", "Recommended settings ✓"));
+            }
+        });
+        paceButton.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                pace[0] = !pace[0];
+                saveVr(vrScale, 72, pace[0]);
+                showVr.run();
             }
         });
         card.addView(summary);
@@ -283,7 +294,7 @@ public class ProfileActivity extends Activity implements View.OnClickListener {
             public void onClick(View v) {
                 msaaOn = !msaaOn;
                 vrScale = qualityScale();
-                saveVr(vrScale, 72);
+                saveVr(vrScale, 72, pace[0]);
                 showVr.run();
             }
         });
@@ -299,21 +310,21 @@ public class ProfileActivity extends Activity implements View.OnClickListener {
                     }
                 }
                 vrScale = next;
-                saveVr(vrScale, 72);
+                saveVr(vrScale, 72, pace[0]);
                 showVr.run();
             }
         });
         warpButton.setOnClickListener(new View.OnClickListener() {
             public void onClick(View v) {
                 warpOn = !warpOn;
-                saveVr(vrScale, 72);
+                saveVr(vrScale, 72, pace[0]);
                 showVr.run();
             }
         });
         boostButton.setOnClickListener(new View.OnClickListener() {
             public void onClick(View v) {
                 boostOn = !boostOn;
-                saveVr(vrScale, 72);
+                saveVr(vrScale, 72, pace[0]);
                 showVr.run();
             }
         });
@@ -332,10 +343,15 @@ public class ProfileActivity extends Activity implements View.OnClickListener {
                 "SpaceWarp: игра рисует половину кадров, шлем досчитывает остальные. Плавнее при большей дальности.",
                 "SpaceWarp: the game draws half the frames and the headset makes up the rest from how everything moves. Smoother with more chunks; turn it off if you see warping."),
                 12, Ui.MUTED, false));
+        card.addView(paceButton, Ui.gap(this, 6));
         card.addView(msaaButton, Ui.gap(this, 6));
         card.addView(Ui.text(this, Ui.t(
                 "MSAA сглаживает края блоков вдали. Если игра не запускается или тормозит, выключите его.",
                 "MSAA smooths the shimmering edges of far blocks. If the game does not start or runs slowly, turn it off."),
+                12, Ui.MUTED, false));
+        card.addView(Ui.text(this, Ui.t(
+                "Ровные кадры: если игра не успевает, она рисует каждый второй кадр ровно, без рывков.",
+                "Frame pacing: when the game cannot keep up, it draws every second frame evenly instead of unevenly, without micro-stutter."),
                 12, Ui.MUTED, false));
 
         // Horizon VR: no Vulkan driver choice (the headset's runtime always uses the system's)
@@ -556,7 +572,7 @@ public class ProfileActivity extends Activity implements View.OnClickListener {
      * A mode: the headset's resolution and refresh rate (horizon-vr.txt, read by the game at
      * start) and the game's heaviest options (options.txt in the game folder).
      */
-    private void applyMode(String mode) {
+    private void applyMode(String mode, boolean pace) {
         float scale;
         int hz, distance, simulation, biome;
         String clouds, particles, entities;
@@ -568,12 +584,14 @@ public class ProfileActivity extends Activity implements View.OnClickListener {
         if (mode.equals("performance")) {
             scale = 0.8f; hz = 72; distance = 12; simulation = 8; clouds = "\"false\""; particles = "1"; biome = 1; entities = "1.0";
         } else if (mode.equals("quality")) {
-            scale = vrScale; hz = 72; distance = 6; simulation = 6; clouds = "\"true\""; particles = "0"; biome = 3; entities = "1.0";
+            // Low game options under the sharp image: no clouds, fewer particles, plain biome
+            // blending, a short simulation distance.
+            scale = vrScale; hz = 72; distance = 6; simulation = 5; clouds = "\"false\""; particles = "1"; biome = 1; entities = "1.0";
         } else {
             scale = 1.0f; hz = 72; distance = 9; simulation = 8; clouds = "\"fast\""; particles = "0"; biome = 2; entities = "1.0";
         }
         try (java.io.FileWriter w = new java.io.FileWriter(vrFile())) {
-            w.write(String.format(java.util.Locale.ROOT, "mode=%s\nscale=%.2f\nhz=%d\nmsaa=%d\nboost=%d\nspacewarp=%d\npreset=4\n", mode, scale, hz, msaaOn ? 1 : 0, boostOn ? 1 : 0, warpOn ? 1 : 0));
+            w.write(String.format(java.util.Locale.ROOT, "mode=%s\nscale=%.2f\nhz=%d\npace=%d\nmsaa=%d\nboost=%d\nspacewarp=%d\npreset=4\n", mode, scale, hz, pace ? 1 : 0, msaaOn ? 1 : 0, boostOn ? 1 : 0, warpOn ? 1 : 0));
         } catch (Exception ignored) {
         }
         java.util.LinkedHashMap<String, String> set = new java.util.LinkedHashMap<>();
@@ -620,14 +638,14 @@ public class ProfileActivity extends Activity implements View.OnClickListener {
     /** The eyes' resolution (horizon-vr.txt `scale=`). */
     private float vrScale = 1.3f;
 
-    /** Quality's resolution to start from: 1.15x with MSAA, 1.4x without. */
+    /** Quality's resolution to start from: 1.3x with MSAA, 1.4x without. */
     private float qualityScale() {
-        return msaaOn ? 1.15f : 1.4f;
+        return msaaOn ? 1.3f : 1.4f;
     }
 
-    private void saveVr(float scale, int hz) {
+    private void saveVr(float scale, int hz, boolean pace) {
         try (java.io.FileWriter w = new java.io.FileWriter(vrFile())) {
-            w.write(String.format(java.util.Locale.ROOT, "mode=quality\nscale=%.2f\nhz=%d\nmsaa=%d\nboost=%d\nspacewarp=%d\npreset=4\n", scale, hz, msaaOn ? 1 : 0, boostOn ? 1 : 0, warpOn ? 1 : 0));
+            w.write(String.format(java.util.Locale.ROOT, "mode=quality\nscale=%.2f\nhz=%d\npace=%d\nmsaa=%d\nboost=%d\nspacewarp=%d\npreset=4\n", scale, hz, pace ? 1 : 0, msaaOn ? 1 : 0, boostOn ? 1 : 0, warpOn ? 1 : 0));
         } catch (Exception ignored) {
         }
     }
