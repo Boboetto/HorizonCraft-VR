@@ -660,8 +660,8 @@ fn set_performance_levels(instance: &xr::Instance, session: &xr::Session<xr::Vul
 /// second (or third) one, evenly, and the compositor shows the last again in between, turned
 /// to the head. Uneven frames (one period, then two) were the micro-stutter. The number of
 /// periods per drawn frame follows the GPU's time (`note_gpu_ms`), changing only once a new
-/// count has held for a second and a half. Off by default: on the Quest 3 it did not help, so
-/// every frame the runtime asks for is drawn. `HORIZON_XR_PACE=on` turns it on for testing.
+/// count has held for a second and a half. `HORIZON_XR_PACE=off` (the launcher) draws every
+/// frame the runtime asks for.
 struct Pace {
     on: bool,
     /// Periods per drawn frame, 1 to 3.
@@ -675,7 +675,7 @@ struct Pace {
 impl Pace {
     fn new() -> Self {
         Pace {
-            on: std::env::var("HORIZON_XR_PACE").as_deref() == Ok("on"),
+            on: std::env::var("HORIZON_XR_PACE").as_deref() != Ok("off"),
             every: 1,
             count: 0,
             gpu_ms: 0.0,

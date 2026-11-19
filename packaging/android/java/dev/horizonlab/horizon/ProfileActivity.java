@@ -236,9 +236,11 @@ public class ProfileActivity extends Activity implements View.OnClickListener {
                 "Резкая картинка и столько чанков, сколько игра рисует плавно.",
                 "A sharp image, with as many chunks as the game draws smoothly."),
                 12, Ui.MUTED, false));
+        final Button paceButton = Ui.button(this, "", false);
         final Button msaaButton = Ui.button(this, "", false);
         final Button scaleButton = Ui.button(this, "", false);
         final Button boostButton = Ui.button(this, "", false);
+        final boolean[] pace = {vrSetting("pace", 1) != 0};
         msaaOn = vrSetting("msaa", 1) != 0;
         boostOn = vrSetting("boost", 1) != 0;
         vrScale = vrSetting("scale", 0);
@@ -246,18 +248,15 @@ public class ProfileActivity extends Activity implements View.OnClickListener {
         // (the game's options can still be changed in the game afterwards).
         // With MSAA the edges are smooth at 1.0x: 1.4x on top of it was four times the samples
         // of 1.0x, and the game fell to a third of 90 Hz.
-        // (`preset`: the defaults' version; an older file takes the new ones once. Preset 3 only
-        // moves the resolution to 1.3x with MSAA and keeps the game's options as they are.)
+        // (`preset`: the defaults' version; an older file takes the new ones once.)
         if (!"quality".equals(vrMode()) || vrSetting("preset", 0) < 2) {
             vrScale = qualityScale();
-            applyMode("quality");
-        } else if (vrSetting("preset", 0) < 3) {
-            vrScale = qualityScale();
-            saveVr(vrScale, 90);
+            applyMode("quality", pace[0]);
         }
         final TextView summary = Ui.text(this, "", 13, Ui.TEXT, true);
         final Runnable showVr = new Runnable() {
             public void run() {
+                paceButton.setText(Ui.t("Ровные кадры: ", "Frame pacing: ") + (pace[0] ? "Auto" : "Off"));
                 msaaButton.setText("Antialiasing MSAA: " + (msaaOn ? "4x" : "Off"));
                 scaleButton.setText(String.format(java.util.Locale.ROOT, Ui.t("Разрешение: %.2fx", "Resolution: %.2fx"), vrScale));
                 boostButton.setText(Ui.t("Ускорение: ", "Performance boost: ") + (boostOn ? "On" : "Off"));
@@ -266,12 +265,19 @@ public class ProfileActivity extends Activity implements View.OnClickListener {
             }
         };
         showVr.run();
+        paceButton.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                pace[0] = !pace[0];
+                saveVr(vrScale, 90, pace[0]);
+                showVr.run();
+            }
+        });
         card.addView(summary);
         msaaButton.setOnClickListener(new View.OnClickListener() {
             public void onClick(View v) {
                 msaaOn = !msaaOn;
                 vrScale = qualityScale();
-                saveVr(vrScale, 90);
+                saveVr(vrScale, 90, pace[0]);
                 showVr.run();
             }
         });
@@ -287,14 +293,14 @@ public class ProfileActivity extends Activity implements View.OnClickListener {
                     }
                 }
                 vrScale = next;
-                saveVr(vrScale, 90);
+                saveVr(vrScale, 90, pace[0]);
                 showVr.run();
             }
         });
         boostButton.setOnClickListener(new View.OnClickListener() {
             public void onClick(View v) {
                 boostOn = !boostOn;
-                saveVr(vrScale, 90);
+                saveVr(vrScale, 90, pace[0]);
                 showVr.run();
             }
         });
@@ -308,10 +314,15 @@ public class ProfileActivity extends Activity implements View.OnClickListener {
                 "Ускорение: процессор и графика шлема на максимуме. Больше кадров, шлем теплее, батарея садится быстрее.",
                 "Performance boost: the headset's CPU and GPU at their highest clocks. More frames; the headset runs warmer and the battery drains faster."),
                 12, Ui.MUTED, false));
+        card.addView(paceButton, Ui.gap(this, 6));
         card.addView(msaaButton, Ui.gap(this, 6));
         card.addView(Ui.text(this, Ui.t(
                 "MSAA сглаживает края блоков вдали. Если игра не запускается или тормозит, выключите его.",
                 "MSAA smooths the shimmering edges of far blocks. If the game does not start or runs slowly, turn it off."),
+                12, Ui.MUTED, false));
+        card.addView(Ui.text(this, Ui.t(
+                "Ровные кадры: если игра не успевает, она рисует каждый второй кадр ровно, без рывков.",
+                "Frame pacing: when the game cannot keep up, it draws every second frame evenly instead of unevenly, without micro-stutter."),
                 12, Ui.MUTED, false));
 
         // Horizon VR: no Vulkan driver choice (the headset's runtime always uses the system's)
@@ -532,7 +543,7 @@ public class ProfileActivity extends Activity implements View.OnClickListener {
      * A mode: the headset's resolution and refresh rate (horizon-vr.txt, read by the game at
      * start) and the game's heaviest options (options.txt in the game folder).
      */
-    private void applyMode(String mode) {
+    private void applyMode(String mode, boolean pace) {
         float scale;
         int hz, distance, simulation, biome;
         String clouds, particles, entities;
@@ -549,7 +560,7 @@ public class ProfileActivity extends Activity implements View.OnClickListener {
             scale = 1.0f; hz = 72; distance = 9; simulation = 8; clouds = "\"fast\""; particles = "0"; biome = 2; entities = "1.0";
         }
         try (java.io.FileWriter w = new java.io.FileWriter(vrFile())) {
-            w.write(String.format(java.util.Locale.ROOT, "mode=%s\nscale=%.2f\nhz=%d\nmsaa=%d\nboost=%d\npreset=3\n", mode, scale, hz, msaaOn ? 1 : 0, boostOn ? 1 : 0));
+            w.write(String.format(java.util.Locale.ROOT, "mode=%s\nscale=%.2f\nhz=%d\npace=%d\nmsaa=%d\nboost=%d\npreset=2\n", mode, scale, hz, pace ? 1 : 0, msaaOn ? 1 : 0, boostOn ? 1 : 0));
         } catch (Exception ignored) {
         }
         java.util.LinkedHashMap<String, String> set = new java.util.LinkedHashMap<>();
@@ -591,16 +602,16 @@ public class ProfileActivity extends Activity implements View.OnClickListener {
     /** The headset's CPU and GPU at their highest clocks (horizon-vr.txt `boost=`). */
     private boolean boostOn = true;
     /** The eyes' resolution (horizon-vr.txt `scale=`). */
-    private float vrScale = 1.3f;
+    private float vrScale = 1.15f;
 
-    /** Quality's resolution to start from: 1.3x with MSAA, 1.4x without. */
+    /** Quality's resolution to start from: 1.15x with MSAA, 1.4x without. */
     private float qualityScale() {
-        return msaaOn ? 1.3f : 1.4f;
+        return msaaOn ? 1.15f : 1.4f;
     }
 
-    private void saveVr(float scale, int hz) {
+    private void saveVr(float scale, int hz, boolean pace) {
         try (java.io.FileWriter w = new java.io.FileWriter(vrFile())) {
-            w.write(String.format(java.util.Locale.ROOT, "mode=quality\nscale=%.2f\nhz=%d\nmsaa=%d\nboost=%d\npreset=3\n", scale, hz, msaaOn ? 1 : 0, boostOn ? 1 : 0));
+            w.write(String.format(java.util.Locale.ROOT, "mode=quality\nscale=%.2f\nhz=%d\npace=%d\nmsaa=%d\nboost=%d\npreset=2\n", scale, hz, pace ? 1 : 0, msaaOn ? 1 : 0, boostOn ? 1 : 0));
         } catch (Exception ignored) {
         }
     }
