@@ -66,6 +66,11 @@ Vivecraft's rules and in-app updates, tested on the Quest 3.
 
 ## Install on the Meta Quest 3
 
+> ⚠️ **Coming from a 0.3.x version?** 1.0 is signed with a new key and cannot install over older versions, and their
+> in-app update will not find it. Copy your worlds out first: with SideQuest, save
+> `Android/data/dev.horizonlab.horizon/files/saves/` to your computer. Then uninstall the old version, install 1.0 and copy
+> the `saves` folder back to the same place. Uninstalling without a copy deletes your worlds.
+
 1. Turn on **developer mode** for your Quest 3: in the **Meta Horizon** app on your phone → Menu → Devices →
    your headset → Headset settings → Developer mode (Meta asks you to create a free developer account once).
 2. Download **`HorizonCraft-VR-v*.apk`** from the [latest release](https://github.com/Boboetto/HorizonCraft-VR/releases/latest).
@@ -82,11 +87,16 @@ Press **Download game files** and wait a few minutes, on Wi-Fi:
 2. HorizonCraft VR prepares its game data on the headset itself, with a Java runtime built into the app (about a minute);
 3. the game starts. Next time it opens straight away.
 
-Later updates: tap **Update** in the launcher's *Updates* section and confirm the install (allow installs from HorizonCraft VR the first time). Your worlds stay.
+Later updates (from 1.0 on): tap **Update** in the launcher's *Updates* section and confirm the install (allow installs from HorizonCraft VR the first time). Your worlds stay.
 
 No computer needed after installing. You need to own Minecraft: Java Edition.
 
 ## In italiano
+
+> ⚠️ **Hai una versione 0.3.x?** La 1.0 è firmata con una chiave nuova e non si installa sopra le versioni precedenti.
+> Prima salva i mondi: con SideQuest copia `Android/data/dev.horizonlab.horizon/files/saves/` sul computer. Poi disinstalla
+> la vecchia versione, installa la 1.0 e rimetti la cartella `saves` nello stesso posto. Se disinstalli senza copia, i
+> mondi vanno persi.
 
 1. **Installa:** attiva la modalità sviluppatore (app Meta Horizon sul telefono → Dispositivi → visore →
    Impostazioni → Modalità sviluppatore) e installa l'APK dell'ultima release trascinandolo su **SideQuest**.
