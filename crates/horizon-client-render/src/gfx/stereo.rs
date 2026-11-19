@@ -13,10 +13,11 @@
 //! takes the view index, and the per-eye uniforms are read from the frame's two eyes
 //! (`Globals::stereo_*`) instead of the one view.
 
-/// `HORIZON_XR_STEREO=0` (A/B checks, or a headset where it fails): each eye draws its
-/// whole frame, as before.
+/// Off by default since flat terrain draws (measured 2026-11-19 on the Quest 3: with them
+/// the multiview pass cost ~14 ms for both eyes, two plain passes ~9 ms, and translucent
+/// terrain only draws multisampled one eye at a time). `HORIZON_XR_STEREO=1` turns it on.
 pub(super) fn wanted() -> bool {
-    std::env::var("HORIZON_XR_STEREO").as_deref() != Ok("0")
+    std::env::var("HORIZON_XR_STEREO").as_deref() == Ok("1")
 }
 
 /// The multiview copy of a WGSL `source`: each `(from, to)` replaced (`to` may read

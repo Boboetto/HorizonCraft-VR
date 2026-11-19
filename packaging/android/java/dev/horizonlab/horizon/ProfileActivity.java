@@ -233,9 +233,11 @@ public class ProfileActivity extends Activity implements View.OnClickListener {
         card = settingsBox;
         Ui.section(card, Ui.t("Настройки VR", "VR settings"));
         card.addView(Ui.text(this, Ui.t(
-                "Резкая картинка и столько чанков, сколько игра рисует плавно.",
-                "A sharp image, with as many chunks as the game draws smoothly."),
-                12, Ui.MUTED, false));
+                "Эти настройки подобраны для Quest 3: 72 Гц с SpaceWarp, ровно и резко. Лучше их не менять; если что-то изменили, кнопка ниже вернёт рекомендуемые.",
+                "These settings are tuned for the Quest 3: 72 Hz with SpaceWarp, smooth and sharp. Best left as they are; if you changed something, the button below brings back the recommended ones."),
+                13, Ui.WARN, false));
+        final Button resetButton = Ui.button(this, Ui.t("Вернуть рекомендуемые настройки", "Restore recommended settings"), true);
+        card.addView(resetButton, Ui.gap(this, 8));
         final Button paceButton = Ui.button(this, "", false);
         final Button msaaButton = Ui.button(this, "", false);
         final Button scaleButton = Ui.button(this, "", false);
@@ -251,7 +253,7 @@ public class ProfileActivity extends Activity implements View.OnClickListener {
         // With MSAA the edges are smooth at 1.0x: 1.4x on top of it was four times the samples
         // of 1.0x, and the game fell to a third of 90 Hz.
         // (`preset`: the defaults' version; an older file takes the new ones once.)
-        if (!"quality".equals(vrMode()) || vrSetting("preset", 0) < 2) {
+        if (!"quality".equals(vrMode()) || vrSetting("preset", 0) < 3) {
             vrScale = qualityScale();
             applyMode("quality", pace[0]);
         }
@@ -264,14 +266,26 @@ public class ProfileActivity extends Activity implements View.OnClickListener {
                 boostButton.setText(Ui.t("Ускорение: ", "Performance boost: ") + (boostOn ? "On" : "Off"));
                 warpButton.setText("SpaceWarp: " + (warpOn ? "On" : "Off"));
                 summary.setText(String.format(java.util.Locale.ROOT,
-                        "Quality · %.2fx · 90 Hz · 6 chunks · anisotropic 8x%s", vrScale, msaaOn ? " · MSAA 4x" : ""));
+                        "Quality · %.2fx · 72 Hz · 6 chunks · anisotropic 8x%s", vrScale, msaaOn ? " · MSAA 4x" : ""));
             }
         };
         showVr.run();
+        resetButton.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                pace[0] = true;
+                msaaOn = true;
+                boostOn = true;
+                warpOn = true;
+                vrScale = qualityScale();
+                applyMode("quality", true);
+                showVr.run();
+                resetButton.setText(Ui.t("Рекомендуемые настройки ✓", "Recommended settings ✓"));
+            }
+        });
         paceButton.setOnClickListener(new View.OnClickListener() {
             public void onClick(View v) {
                 pace[0] = !pace[0];
-                saveVr(vrScale, 90, pace[0]);
+                saveVr(vrScale, 72, pace[0]);
                 showVr.run();
             }
         });
@@ -280,7 +294,7 @@ public class ProfileActivity extends Activity implements View.OnClickListener {
             public void onClick(View v) {
                 msaaOn = !msaaOn;
                 vrScale = qualityScale();
-                saveVr(vrScale, 90, pace[0]);
+                saveVr(vrScale, 72, pace[0]);
                 showVr.run();
             }
         });
@@ -296,21 +310,21 @@ public class ProfileActivity extends Activity implements View.OnClickListener {
                     }
                 }
                 vrScale = next;
-                saveVr(vrScale, 90, pace[0]);
+                saveVr(vrScale, 72, pace[0]);
                 showVr.run();
             }
         });
         warpButton.setOnClickListener(new View.OnClickListener() {
             public void onClick(View v) {
                 warpOn = !warpOn;
-                saveVr(vrScale, 90, pace[0]);
+                saveVr(vrScale, 72, pace[0]);
                 showVr.run();
             }
         });
         boostButton.setOnClickListener(new View.OnClickListener() {
             public void onClick(View v) {
                 boostOn = !boostOn;
-                saveVr(vrScale, 90, pace[0]);
+                saveVr(vrScale, 72, pace[0]);
                 showVr.run();
             }
         });
@@ -570,12 +584,12 @@ public class ProfileActivity extends Activity implements View.OnClickListener {
         if (mode.equals("performance")) {
             scale = 0.8f; hz = 72; distance = 12; simulation = 8; clouds = "\"false\""; particles = "1"; biome = 1; entities = "1.0";
         } else if (mode.equals("quality")) {
-            scale = vrScale; hz = 90; distance = 6; simulation = 6; clouds = "\"true\""; particles = "0"; biome = 3; entities = "1.0";
+            scale = vrScale; hz = 72; distance = 6; simulation = 6; clouds = "\"true\""; particles = "0"; biome = 3; entities = "1.0";
         } else {
             scale = 1.0f; hz = 72; distance = 9; simulation = 8; clouds = "\"fast\""; particles = "0"; biome = 2; entities = "1.0";
         }
         try (java.io.FileWriter w = new java.io.FileWriter(vrFile())) {
-            w.write(String.format(java.util.Locale.ROOT, "mode=%s\nscale=%.2f\nhz=%d\npace=%d\nmsaa=%d\nboost=%d\nspacewarp=%d\npreset=2\n", mode, scale, hz, pace ? 1 : 0, msaaOn ? 1 : 0, boostOn ? 1 : 0, warpOn ? 1 : 0));
+            w.write(String.format(java.util.Locale.ROOT, "mode=%s\nscale=%.2f\nhz=%d\npace=%d\nmsaa=%d\nboost=%d\nspacewarp=%d\npreset=3\n", mode, scale, hz, pace ? 1 : 0, msaaOn ? 1 : 0, boostOn ? 1 : 0, warpOn ? 1 : 0));
         } catch (Exception ignored) {
         }
         java.util.LinkedHashMap<String, String> set = new java.util.LinkedHashMap<>();
@@ -629,7 +643,7 @@ public class ProfileActivity extends Activity implements View.OnClickListener {
 
     private void saveVr(float scale, int hz, boolean pace) {
         try (java.io.FileWriter w = new java.io.FileWriter(vrFile())) {
-            w.write(String.format(java.util.Locale.ROOT, "mode=quality\nscale=%.2f\nhz=%d\npace=%d\nmsaa=%d\nboost=%d\nspacewarp=%d\npreset=2\n", scale, hz, pace ? 1 : 0, msaaOn ? 1 : 0, boostOn ? 1 : 0, warpOn ? 1 : 0));
+            w.write(String.format(java.util.Locale.ROOT, "mode=quality\nscale=%.2f\nhz=%d\npace=%d\nmsaa=%d\nboost=%d\nspacewarp=%d\npreset=3\n", scale, hz, pace ? 1 : 0, msaaOn ? 1 : 0, boostOn ? 1 : 0, warpOn ? 1 : 0));
         } catch (Exception ignored) {
         }
     }
