@@ -146,8 +146,9 @@ public class HorizonActivity extends NativeActivity {
 
     /**
      * Called from the game thread once the native loop has exited (Quit Game, or the game could
-     * not go on). NativeActivity can't run the game twice in one process, so the task is removed
-     * and the process ends; the next launch starts clean instead of on a dead black window.
+     * not go on). NativeActivity can't run the game twice in one process, so the game's process
+     * ends and the launcher opens again; the next Play starts clean instead of on a dead black
+     * window.
      * Only this explicit path ends the process: opening Profile or Files, or the system
      * recreating the activity, never does.
      */
@@ -155,7 +156,15 @@ public class HorizonActivity extends NativeActivity {
         quitting = true;
         runOnUiThread(new Runnable() {
             public void run() {
-                finishAndRemoveTask();
+                // The game runs in its own process (":game"): the launcher, in the app's main
+                // process, comes back while this one ends.
+                try {
+                    startActivity(new android.content.Intent(HorizonActivity.this, ProfileActivity.class)
+                            .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK));
+                    finish();
+                } catch (Exception e) {
+                    finishAndRemoveTask();
+                }
             }
         });
         new Thread(new Runnable() {

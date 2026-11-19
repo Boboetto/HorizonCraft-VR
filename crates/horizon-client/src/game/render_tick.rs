@@ -271,7 +271,42 @@ impl Game<'_> {
         // ScreenEffectRenderer: none of it for a spectator (noPhysics).
         let spectator = self.spectator();
         let mut block_overlay = None;
-        if !spectator {
+        // VR: the real head, which leans into walls the body stops at; Vivecraft's view
+        // inside a block. The 8 points of a 0.1 m box around it (the near plane's size).
+        #[cfg(target_os = "android")]
+        let head = horizon_xr::active()
+            .then(horizon_xr::head_offset)
+            .flatten()
+            .filter(|_| !spectator);
+        #[cfg(not(target_os = "android"))]
+        let head: Option<glam::Vec3> = None;
+        if let Some(lean) = head {
+            let at = [
+                eye[0] + f64::from(lean.x),
+                eye[1] + f64::from(lean.y),
+                eye[2] + f64::from(lean.z),
+            ];
+            let near_plane = horizon_core::geometry::Aabb::new(
+                horizon_core::geometry::Vec3::new(at[0] - 0.05, at[1] - 0.05, at[2] - 0.05),
+                horizon_core::geometry::Vec3::new(at[0] + 0.05, at[1] + 0.05, at[2] + 0.05),
+            );
+            for i in 0..8 {
+                let corner = |bit: i32, v: f64| v + if i & bit != 0 { 0.05 } else { -0.05 };
+                let pos = [
+                    corner(1, at[0]).floor() as i32,
+                    corner(2, at[1]).floor() as i32,
+                    corner(4, at[2]).floor() as i32,
+                ];
+                let state = self.world.block(pos[0], pos[1], pos[2]);
+                if self.res.facts().get(state).render_shape
+                    != horizon_client::blocks::RenderShape::Invisible
+                    && self.state_view_blocking(state, pos, near_plane)
+                {
+                    block_overlay = Self::block_particle_sprite(&self.pack, state);
+                    break;
+                }
+            }
+        } else if !spectator {
             // Frustum.getNearPlaneBounds, moved to the eye.
             let (near_min, near_max) = horizon_client::camera::near_plane_bounds(
                 self.fov_degrees(partial, eye),

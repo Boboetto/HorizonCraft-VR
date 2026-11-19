@@ -239,6 +239,9 @@ struct Session {
     eye_drawn: [bool; 2],
     /// The head's pose in LOCAL space at the last `begin_frame`.
     head: Option<(Quat, Vec3)>,
+    /// The head's middle relative to the game's camera this frame, in world axes (the
+    /// lean the eyes are drawn from, `head_offset`).
+    head_offset: Vec3,
     /// The controllers' spaces and their poses in LOCAL space at the last frame, by `Hand`.
     hand_spaces: Vec<xr::Space>,
     hands: [Option<(Quat, Vec3)>; 4],
@@ -938,6 +941,7 @@ fn start_session(xr: &Xr, device: &wgpu::Device, raw_device: vk::Device) -> Resu
         move_turn: 0.0,
         last_lean: Vec3::ZERO,
         anchor: None,
+        head_offset: Vec3::ZERO,
         body_yaw: 0.0,
         look_head: false,
         last_yaw: None,
@@ -1057,6 +1061,7 @@ pub fn begin_frame() -> Option<FrameViews> {
     // Leaning moves the view, up to MAX_LEAN from where the head started.
     let lean = (head_position - anchor).clamp_length_max(MAX_LEAN);
     let body = body_rotation(s.body_yaw);
+    s.head_offset = body * lean;
     if s.warp.is_some() {
         let rig = (body, head_position - lean);
         s.warp_delta = s.warp_rig.map(|(then_body, then_at)| {
@@ -1309,6 +1314,15 @@ pub fn note_panel_in_eyes() {
     if let Some(s) = xr_state().as_mut().and_then(|x| x.session.as_mut()) {
         s.panel_in_eyes = true;
     }
+}
+
+/// Where the head is relative to the game's camera (world axes, metres): the eyes'
+/// middle, leaning up to `MAX_LEAN` from where it started.
+pub fn head_offset() -> Option<Vec3> {
+    let guard = xr_state();
+    let s = guard.as_ref()?.session.as_ref()?;
+    s.head?;
+    Some(s.head_offset)
 }
 
 /// Where the head looks: its yaw and pitch in the world (Minecraft degrees) and its
