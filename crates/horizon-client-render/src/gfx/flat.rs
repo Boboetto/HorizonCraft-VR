@@ -209,12 +209,18 @@ pub fn is_broken_intel_vulkan(info: &wgpu::AdapterInfo) -> bool {
         .any(|tag| info.name.contains(tag)))
 }
 
+/// The smallest storage binding flat draws take: pages of this size still hold dozens of
+/// sections.
+const MIN_PAGE_BYTES: u64 = 64 << 20;
+
 fn supported(adapter: &wgpu::Adapter, device: &wgpu::Device) -> bool {
     let flags = adapter.get_downlevel_capabilities().flags;
     let limits = device.limits();
     flags.contains(wgpu::DownlevelFlags::VERTEX_STORAGE | wgpu::DownlevelFlags::COMPUTE_SHADERS)
         && limits.max_storage_buffers_per_shader_stage >= 3
-        && limits.max_storage_buffer_binding_size >= super::arena::PAGE_BYTES
+        // The arena's storage pages shrink to the binding limit (`Arena::with_usage`): the
+        // Quest 3's Adreno binds 128 MiB, half of `arena::PAGE_BYTES`.
+        && limits.max_storage_buffer_binding_size >= MIN_PAGE_BYTES
 }
 
 fn storage(binding: u32, stage: wgpu::ShaderStages, read_only: bool) -> wgpu::BindGroupLayoutEntry {

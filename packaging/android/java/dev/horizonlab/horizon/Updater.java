@@ -82,12 +82,42 @@ final class Updater {
         }
     }
 
+    private static int installedCode(Context c) {
+        try {
+            return c.getPackageManager().getPackageInfo(c.getPackageName(), 0).versionCode;
+        } catch (Exception e) {
+            return 0;
+        }
+    }
+
+    /**
+     * Test builds: the dev server's version.json ({"version", "code", "size"}) and its
+     * horizon.apk, newer when its versionCode is higher (the URL carries the code, so no
+     * cached older APK comes back).
+     */
+    private static Release checkDevServer(Context c) throws Exception {
+        HttpURLConnection http = (HttpURLConnection) new URL(DevServer.URL + "/version.json").openConnection();
+        http.setConnectTimeout(5000);
+        http.setReadTimeout(5000);
+        http.setUseCaches(false);
+        if (http.getResponseCode() != 200) return null;
+        JSONObject json = new JSONObject(read(http.getInputStream()));
+        int code = json.optInt("code", 0);
+        if (code <= installedCode(c)) return null;
+        return new Release(json.optString("version", "test " + code),
+                DevServer.URL + "/horizon.apk?v=" + code, json.optLong("size", 0));
+    }
+
     static void check(final Context c, final Found found) {
         final Handler main = new Handler(Looper.getMainLooper());
         new Thread(new Runnable() {
             public void run() {
                 Release release = null;
                 try {
+                    if (!DevServer.URL.isEmpty()) {
+                        release = checkDevServer(c);
+                        throw new Exception("test build: no GitHub check");
+                    }
                     HttpURLConnection http = (HttpURLConnection) new URL(API).openConnection();
                     http.setConnectTimeout(8000);
                     http.setReadTimeout(8000);
@@ -139,6 +169,7 @@ final class Updater {
                 File apk = new File(a.getCacheDir(), "update.apk");
                 try {
                     HttpURLConnection http = (HttpURLConnection) new URL(release.apk).openConnection();
+                    http.setUseCaches(false);
                     http.setConnectTimeout(15000);
                     http.setReadTimeout(30000);
                     http.setRequestProperty("User-Agent", "HorizonCraft-VR-launcher");

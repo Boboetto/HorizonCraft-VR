@@ -7845,9 +7845,18 @@ impl Renderer {
         if option_env!("HORIZON_LOG_URL").is_none() || self.screenshot.is_some() {
             return;
         }
+        // `HORIZON_XR_EYE_SECS=<seconds>` (vr-env.txt) turns it on: reading the eye back
+        // stalls the frame, a drop every time (measured 2026-11-19: every 10 s, 66 → 52
+        // frames in those 2 s).
+        static EVERY: std::sync::OnceLock<Option<u64>> = std::sync::OnceLock::new();
+        let Some(every) = *EVERY.get_or_init(|| {
+            std::env::var("HORIZON_XR_EYE_SECS").ok()?.trim().parse().ok().filter(|s| *s > 0)
+        }) else {
+            return;
+        };
         let due = self
             .xr_snapshot
-            .is_none_or(|t| t.elapsed() > std::time::Duration::from_secs(10));
+            .is_none_or(|t| t.elapsed() > std::time::Duration::from_secs(every));
         if due && let Some(home) = std::env::var_os("HORIZON_HOME") {
             self.xr_snapshot = Some(Instant::now());
             self.screenshot = Some(ScreenshotRequest {

@@ -19,13 +19,24 @@ if [ -n "${OPENXR_LOADER:-}" ]; then
   cp "$OPENXR_LOADER" "$OUT/stage/lib/arm64-v8a/libopenxr_loader.so"
 fi
 # HorizonActivity (the soft keyboard bridge) -> classes.dex.
-rm -rf "$OUT/java" && mkdir -p "$OUT/java/classes"
+rm -rf "$OUT/java" && mkdir -p "$OUT/java/classes" "$OUT/java/src/dev/horizonlab/horizon"
+# Test builds (HORIZON_LOG_URL set): the launcher's updater asks the PC's dev server
+# (version.json beside the log URL) instead of GitHub. Release builds: empty.
+DEV_SERVER="${HORIZON_LOG_URL:+${HORIZON_LOG_URL%/log}}"
+printf 'package dev.horizonlab.horizon;\nfinal class DevServer {\n    static final String URL = "%s";\n    private DevServer() {}\n}\n' \
+  "${DEV_SERVER:-}" > "$OUT/java/src/dev/horizonlab/horizon/DevServer.java"
 "${JAVAC:-javac}" --release 8 -nowarn -classpath "$PLATFORM" -d "$OUT/java/classes" \
-  $(find packaging/android/java -name '*.java')
+  $(find packaging/android/java "$OUT/java/src" -name '*.java')
 "$BT/d8" --min-api 26 --lib "$PLATFORM" --output "$OUT/java" $(find "$OUT/java/classes" -name '*.class')
 rm -rf "$OUT/res" && mkdir -p "$OUT/res"
 "$BT/aapt2" compile --dir packaging/android/res -o "$OUT/res/res.zip"
-"$BT/aapt2" link -o "$OUT/unaligned.apk" --manifest packaging/android/AndroidManifest.xml -I "$PLATFORM" \
+# Test builds: plain HTTP to the PC's dev server from Java too (the updater).
+MANIFEST=packaging/android/AndroidManifest.xml
+if [ -n "${HORIZON_LOG_URL:-}" ]; then
+  sed 's/<application/<application android:usesCleartextTraffic="true"/' "$MANIFEST" > "$OUT/AndroidManifest.xml"
+  MANIFEST="$OUT/AndroidManifest.xml"
+fi
+"$BT/aapt2" link -o "$OUT/unaligned.apk" --manifest "$MANIFEST" -I "$PLATFORM" \
   --min-sdk-version 26 --target-sdk-version 35 "$OUT/res/res.zip"
 python3 - "$OUT" <<'PY'
 import sys, zipfile
