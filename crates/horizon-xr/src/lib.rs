@@ -19,7 +19,7 @@ mod blit;
 mod warp;
 
 use ash::vk::{self, Handle};
-use glam::{Quat, Vec3};
+use glam::{Mat4, Quat, Vec3};
 use openxr as xr;
 use std::ffi::{CStr, CString, c_void};
 use std::path::PathBuf;
@@ -247,6 +247,11 @@ struct Session {
     hands: [Option<(Quat, Vec3)>; 4],
     /// The controllers in the world at the last frame (`last_hands`).
     world_hands: [Option<HandPose>; 4],
+    /// `world_hands` before the last `begin_frame`: what the game built that frame's arms
+    /// on (`hand_catch_up`).
+    built_hands: [Option<HandPose>; 4],
+    /// The game's arm vertices of each side in the frame it built (`set_hand_spans`).
+    hand_spans: Vec<(u32, u32, bool)>,
     /// Where the right controller points on the open menu's panel (0..1, from the top
     /// left), the trigger held, and the point in LOCAL space.
     /// Each controller's point on the open menu's panel (0..1 from the top left) and in
@@ -925,6 +930,8 @@ fn start_session(xr: &Xr, device: &wgpu::Device, raw_device: vk::Device) -> Resu
         hand_spaces,
         hands: [None; 4],
         world_hands: [None; 4],
+        built_hands: [None; 4],
+        hand_spans: Vec::new(),
         pointers: [None; 2],
         active_hand: 1,
         triggers_held: [false; 2],
@@ -1109,7 +1116,7 @@ pub fn begin_frame() -> Option<FrameViews> {
             offset: body * (position - head_position + lean),
         })
     });
-    s.world_hands = hands;
+    s.built_hands = std::mem::replace(&mut s.world_hands, hands);
     if s.menu_open && s.menu_pose.is_none() {
         s.menu_pose = Some(menu_pose(head_rotation, head_position));
     }
@@ -1250,6 +1257,33 @@ pub fn room_hands() -> Option<[Option<Vec3>; 4]> {
 /// without the player's walking or turning.
 pub fn room_hand_poses() -> Option<[Option<(Quat, Vec3)>; 4]> {
     Some(xr_state().as_ref()?.session.as_ref()?.hands)
+}
+
+/// The game's arm and held item vertices in the frame it is building: each span's first and
+/// end vertex and whether it is the left controller's (`hand_catch_up`).
+pub fn set_hand_spans(spans: Vec<(u32, u32, bool)>) {
+    if let Some(s) = xr_state().as_mut().and_then(|x| x.session.as_mut()) {
+        s.hand_spans = spans;
+    }
+}
+
+/// The arms are built before `begin_frame` locates the controllers for the frame they show
+/// in, on the poses of the frame before (`last_hands`): a frame late, so they lagged the
+/// view and the wrist's hotbar (placed on this frame's poses) while the head or the stick
+/// turned. Returns the spans (`set_hand_spans`) and, left then right, what moves an arm from
+/// where it was built to this frame's controller.
+pub fn hand_catch_up() -> Option<(Vec<(u32, u32, bool)>, [Option<Mat4>; 2])> {
+    let guard = xr_state();
+    let s = guard.as_ref()?.session.as_ref()?;
+    if s.hand_spans.is_empty() {
+        return None;
+    }
+    let frame = |hands: &[Option<HandPose>; 4], left: bool| {
+        let (grip, aim) = if left { (Hand::LeftGrip, Hand::LeftAim) } else { (Hand::RightGrip, Hand::RightAim) };
+        Some(Mat4::from_translation(hands[grip as usize]?.offset) * Mat4::from_quat(hands[aim as usize]?.rotation))
+    };
+    let catch_up = |left: bool| Some(frame(&s.world_hands, left)? * frame(&s.built_hands, left)?.inverse());
+    Some((s.hand_spans.clone(), [catch_up(true), catch_up(false)]))
 }
 
 /// The controllers in the world at the last frame, by `Hand`, for the game to put the

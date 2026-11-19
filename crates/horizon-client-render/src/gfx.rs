@@ -846,6 +846,7 @@ impl ShrinkGate {
         left == COMPACT_BUDGET && self.0.is_none_or(|at| now >= at)
     }
 }
+#[derive(Clone)]
 pub struct Frame<'a> {
     pub camera: DVec3,
     pub yaw: f32,
@@ -7730,6 +7731,17 @@ impl Renderer {
             self.suspended = suspended;
             return result.map(|_| false);
         };
+        // The arms were built on the last frame's controller poses: onto this frame's.
+        let caught_up;
+        let moved_frame;
+        let frame = match horizon_xr::hand_catch_up() {
+            Some((spans, moves)) if !frame.hand.is_empty() => {
+                caught_up = xr_hands_caught_up(frame.hand, &spans, moves);
+                moved_frame = Frame { hand: &caught_up, ..frame.clone() };
+                &moved_frame
+            }
+            _ => frame,
+        };
         let [width, height] = xr.size;
         if [self.config.width, self.config.height] != [width, height] {
             self.resize(width, height);
@@ -12941,6 +12953,25 @@ fn off_centre_projection([left, right, up, down]: [f32; 4], far: f32) -> Mat4 {
 
 /// One eye of a headset: its rotation and offset from the camera, and its lens.
 #[cfg(target_os = "android")]
+/// VR: `hand` with each arm's span (`horizon_xr::hand_catch_up`) moved by its side's move
+/// (left, right), normals turned with it.
+#[cfg(target_os = "android")]
+fn xr_hands_caught_up(hand: &[Vertex], spans: &[(u32, u32, bool)], moves: [Option<Mat4>; 2]) -> Vec<Vertex> {
+    let mut out = hand.to_vec();
+    for &(start, end, left) in spans {
+        let Some(m) = moves[usize::from(!left)] else { continue };
+        let end = (end as usize).min(out.len());
+        let Some(span) = out.get_mut(start as usize..end) else { continue };
+        for v in span {
+            v.pos = m.transform_point3(Vec3::from(v.pos)).to_array();
+            let n = m.transform_vector3(Vec3::new(f32::from(v.normal[0]), f32::from(v.normal[1]), f32::from(v.normal[2])));
+            let n = n.round().clamp(Vec3::splat(-127.0), Vec3::splat(127.0));
+            v.normal = [n.x as i8, n.y as i8, n.z as i8, v.normal[3]];
+        }
+    }
+    out
+}
+
 fn xr_eye_view(eye: &horizon_xr::Eye, far: f32) -> View {
     eye_view(eye.rotation, eye.offset, eye.fov, far)
 }

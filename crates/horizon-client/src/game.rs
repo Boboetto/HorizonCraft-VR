@@ -15123,6 +15123,7 @@ impl Game<'_> {
     /// and where the arm and each item start, with the `currentRenderedItemId`
     /// a shader pack reads for them.
     fn hand_geometry(&mut self, alpha: f64) -> (Vec<Vertex>, Vec<(u32, i32)>) {
+        vr_set_hand_spans(Vec::new());
         let mut out = Vec::new();
         let mut runs = Vec::new();
         // GameRenderer.renderItemInHand: F1 hides the hand with the HUD.
@@ -15185,7 +15186,14 @@ impl Game<'_> {
             };
         let vr_bow = vr_hand_frame(false).is_some()
             && items[0].as_ref().is_some_and(|s| &*s.item == "minecraft:bow");
+        // VR: each arm's vertices, for the renderer to bring onto the frame's own poses
+        // (`horizon_xr::hand_catch_up`).
+        let mut vr_spans = Vec::new();
+        let mut vr_open: Option<(u32, bool)> = None;
         for (i, (hand, item)) in Hand::BOTH.into_iter().zip(items).enumerate() {
+            if let Some((start, left)) = vr_open.take() {
+                vr_spans.push((start, out.len() as u32, left));
+            }
             // VR: both arms show, each on its controller, whatever they hold.
             // A bow goes to the left hand, the right one pulls its string.
             let vr_left = (self.settings.main_hand_left != (hand == Hand::Off)) != vr_bow;
@@ -15196,6 +15204,9 @@ impl Game<'_> {
                 self.vr_hand_blocked(frame, reach)
                     * vr_swing(if vr_gesture_active() { 0.0 } else { attacks[i] })
             });
+            if vr_frame.is_some() {
+                vr_open = Some((out.len() as u32, vr_left));
+            }
             if !shown[i] && vr_frame.is_none() {
                 continue;
             }
@@ -15439,6 +15450,10 @@ impl Game<'_> {
                 &mut out,
             );
         }
+        if let Some((start, left)) = vr_open.take() {
+            vr_spans.push((start, out.len() as u32, left));
+        }
+        vr_set_hand_spans(vr_spans);
         // The hand has its own submit storage, which never uses improved
         // transparency (`LevelRenderer` alone calls `setUseImprovedTransparency`):
         // a held player head stays classic.
@@ -20416,6 +20431,14 @@ fn vr_hand_frame(left: bool) -> Option<glam::Mat4> {
         let _ = left;
         None
     }
+}
+
+/// VR: the arms' vertex spans in the frame being built (`horizon_xr::set_hand_spans`).
+fn vr_set_hand_spans(spans: Vec<(u32, u32, bool)>) {
+    #[cfg(target_os = "android")]
+    horizon_xr::set_hand_spans(spans);
+    #[cfg(not(target_os = "android"))]
+    let _ = spans;
 }
 
 /// VR: a held item with a blade or head that strikes: swords, tools, the trident and mace.
