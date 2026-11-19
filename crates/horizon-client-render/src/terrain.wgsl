@@ -659,6 +659,57 @@ fn solid_color(in: TerrainOut) -> vec4<f32> {
     if color.a < 0.5 && (in.layer & 0x8000u) == 0u { discard; }
     return solid_finish(in, texel, color);
 }
+// VR's MSAA (4 samples): `fs_solid` with the cut-out tested at each sample's place, so the
+// edges drawn inside grass, leaves and flowers are smoothed as the blocks' own edges (one
+// test at the pixel's middle gives each pixel all or none of them, and the edges crawl as
+// the head moves). The colour is worked out once, from a kept sample's texel.
+struct CoverageOut {
+    @location(0) color: vec4<f32>,
+    @builtin(sample_mask) mask: u32,
+};
+@fragment fn fs_solid_coverage(in: TerrainOut) -> CoverageOut {
+    let dx = dpdx(in.local);
+    let dy = dpdy(in.local);
+    if HDR_LIGHTING && globals.hdr_light.z != 0.0 {
+        hdr_normal = normalize(cross(dy, dx));
+    }
+    if faded(in.fade, in.local, dx, dy) { discard; }
+    let du = dpdx(in.uv);
+    let dv = dpdy(in.uv);
+    let layer = in.layer & 0x7fffu;
+    var out: CoverageOut;
+    // Quads with no cut-out (bit 15, `opaque_quad`): one look, every sample, as `fs_solid`.
+    if (in.layer & 0x8000u) != 0u {
+        let t = sprite_at(in.uv, layer, du, dv);
+        let c = mix(globals.fog_color * vec4(1.0, 1.0, 1.0, t.a * in.color.a), t * in.color,
+            in.visibility);
+        out.color = solid_finish_at(in, t, c, du, dv);
+        out.mask = 0xffffffffu;
+        return out;
+    }
+    // Vulkan's standard 4-sample places, from the pixel's middle.
+    let places = array<vec2<f32>, 4>(
+        vec2(-0.125, -0.375), vec2(0.375, -0.125), vec2(-0.375, 0.125), vec2(0.125, 0.375));
+    var mask = 0u;
+    var texel = vec4<f32>(0.0);
+    var kept = false;
+    for (var k = 0u; k < 4u; k++) {
+        let t = sprite_at(in.uv + du * places[k].x + dv * places[k].y, layer, du, dv);
+        if t.a * in.color.a >= 0.5 {
+            mask |= 1u << k;
+            if !kept {
+                texel = t;
+                kept = true;
+            }
+        }
+    }
+    if mask == 0u { discard; }
+    var color = texel * in.color;
+    color = mix(globals.fog_color * vec4(1.0, 1.0, 1.0, color.a), color, in.visibility);
+    out.color = solid_finish_at(in, texel, color, du, dv);
+    out.mask = mask;
+    return out;
+}
 // The rest of a solid pixel's colour once it is kept: emission and fog.
 fn solid_finish(in: TerrainOut, texel: vec4<f32>, color: vec4<f32>) -> vec4<f32> {
     return solid_finish_at(in, texel, color, dpdx(in.uv), dpdy(in.uv));

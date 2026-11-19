@@ -34,6 +34,8 @@ pub(super) struct Pipelines {
     pub solid_cutout: SolidPipeline,
     /// The flat solid draws' (`super::flat`): whole, opaque, cutout.
     pub flat: Option<[SolidPipeline; 3]>,
+    /// The flat translucent terrain's: water, ice and glass drawn multisampled too.
+    pub flat_translucent: Option<wgpu::RenderPipeline>,
 }
 
 struct Targets {

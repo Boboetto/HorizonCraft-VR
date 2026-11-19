@@ -4740,7 +4740,7 @@ impl Renderer {
         let msaa_set = (msaa > 1).then(|| {
             samples.set(msaa);
             let build_set = || {
-            let (solid, solid_opaque, solid_cutout, flat_set) = match &flat {
+            let (solid, solid_opaque, solid_cutout, flat_set, flat_translucent) = match &flat {
                 Some(f) => {
                     let pulled_layout = kept.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                         label: Some("Horizon terrain layout (pulled)"),
@@ -4756,11 +4756,11 @@ impl Renderer {
                         solid_in(&pulled_layout, label, vertex, fragment, &[])
                     };
                     (
-                        solid("Terrain solid", "vs_section", "fs_solid"),
+                        solid("Terrain solid", "vs_section", xr_cutout_fragment()),
                         solid("Terrain solid opaque", "vs_section_opaque", "fs_opaque"),
-                        solid("Terrain solid cutout", "vs_section_cutout", "fs_solid"),
+                        solid("Terrain solid cutout", "vs_section_cutout", xr_cutout_fragment()),
                         Some([
-                            flat_solid("Terrain solid (flat)", "vs_section_flat", "fs_solid"),
+                            flat_solid("Terrain solid (flat)", "vs_section_flat", xr_cutout_fragment()),
                             flat_solid(
                                 "Terrain solid opaque (flat)",
                                 "vs_section_flat_opaque",
@@ -4769,9 +4769,26 @@ impl Renderer {
                             flat_solid(
                                 "Terrain solid cutout (flat)",
                                 "vs_section_flat_cutout",
-                                "fs_solid",
+                                xr_cutout_fragment(),
                             ),
                         ]),
+                        // As `flat::Flat`'s translucent pipeline: its vertex buffer kept.
+                        Some(pipeline_in(
+                            &pulled_layout,
+                            "Terrain translucent (flat)",
+                            "vs_terrain_flat",
+                            "fs_translucent",
+                            &[Some(wgpu::VertexBufferLayout {
+                                array_stride: std::mem::size_of::<TerrainVertex>() as u64,
+                                step_mode: wgpu::VertexStepMode::Vertex,
+                                attributes: &TERRAIN_ATTRIBUTES,
+                            })],
+                            tri,
+                            Some(wgpu::Face::Back),
+                            true,
+                            true,
+                            Some(wgpu::BlendState::ALPHA_BLENDING),
+                        )),
                     )
                 }
                 None => (
@@ -4791,6 +4808,7 @@ impl Renderer {
                         &terrain_buffers,
                     ),
                     None,
+                    None,
                 ),
             };
             msaa::Pipelines {
@@ -4804,6 +4822,7 @@ impl Renderer {
                 solid_opaque,
                 solid_cutout,
                 flat: flat_set,
+                flat_translucent,
             }
             };
             let pipelines = build_set();
@@ -10496,6 +10515,11 @@ impl Renderer {
             })];
             // The right eye of a stereo frame: its layer of what the left eye's frame drew,
             // then the rest of its world as after MSAA's part.
+            // VR's MSAA, flat frames one eye at a time: translucent terrain (water, ice, glass)
+            // drawn multisampled at the end of MSAA's part, its edges smoothed as the solid
+            // blocks' (single-sampled, they crawl as the head moves), and its depth in the
+            // depth copy SpaceWarp reads.
+            let mut translucent_in_msaa = false;
             let mut pass = if stereo_take && let Some(ms) = ms {
                 ms.take_stereo_layer(
                     &mut encoder,
@@ -10989,6 +11013,25 @@ impl Renderer {
                 }
                 pass.set_bind_group(0, &self.group, &[]);
             }
+            if !stereo_draw
+                && !oit_on
+                && !pack_draws_water
+                && flat_frame
+                && let (Some(flat), Some(pipeline)) = (
+                    self.flat.as_ref(),
+                    msp.and_then(|m| m.flat_translucent.as_ref()).filter(|_| ms.is_some()),
+                )
+            {
+                pass.set_pipeline(pipeline);
+                flat.draw(
+                    &mut pass,
+                    flat.translucent_calls(),
+                    flat_vertices(&self.arena, self.translucent_arena.as_ref()),
+                );
+                pass.set_bind_group(0, &self.group, &[]);
+                pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
+                translucent_in_msaa = true;
+            }
             // MSAA's part ends: its colour resolves into the world target, its depth's first
             // sample goes to the world's depth, and the rest of the world draws on over both.
             if let Some(ms) = ms {
@@ -11403,6 +11446,7 @@ impl Renderer {
                     }
                     self.mark_translucent_terrain(&mut pass, flat, solid_draws, translucent_draws);
                 }
+                Some(_) if translucent_in_msaa => {}
                 Some(flat) => {
                     pass.set_pipeline(pack_flat.map_or(&flat.translucent, |p| &p.1));
                     flat.draw(
@@ -12935,6 +12979,17 @@ fn xr_flat_draws() -> bool {
     #[cfg(not(target_os = "android"))]
     {
         fake_xr_fov().is_some() && std::env::var("HORIZON_XR_FLAT").as_deref() == Ok("1")
+    }
+}
+
+/// VR's MSAA: the cut-out pass (grass, leaves, flowers) tests the cut-out at each of the 4
+/// samples (`fs_solid_coverage`), smoothing the edges inside their textures.
+/// `HORIZON_XR_CUTOUT_AA=0` tests it once per pixel, as before.
+fn xr_cutout_fragment() -> &'static str {
+    if std::env::var("HORIZON_XR_CUTOUT_AA").as_deref() == Ok("0") {
+        "fs_solid"
+    } else {
+        "fs_solid_coverage"
     }
 }
 
