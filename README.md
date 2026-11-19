@@ -22,6 +22,10 @@
 HorizonCraft VR is a standalone APK for the **Meta Quest 3** (for now the only supported headset): no PC, no streaming.
 It plays Minecraft: Java Edition 26.3 in VR, with motion controls in the spirit of Vivecraft and QuestCraft.
 
+**1.0** is the first stable release, tested on the Quest 3: a steady 72 Hz with Application SpaceWarp, terrain drawn
+in a few big batches, MSAA 4x that also smooths water, ice, glass, grass and leaves, gestures on Vivecraft's rules and
+in-app updates. 0.3.x installs update in place (worlds stay).
+
 ## Features
 
 - Stereo VR with head tracking; both arms follow the Touch controllers, items in the hands
@@ -35,7 +39,7 @@ It plays Minecraft: Java Edition 26.3 in VR, with motion controls in the spirit 
   throw it, flick a fishing rod out and back, hold a shield up in front, cock a crossbow with the other hand
 - Menus on a panel in the room with a pointer for each hand, 360° title panorama
 - Walk where you look with the left stick, turn with the right one
-- A Quality setup tuned for the Quest 3 (MSAA 4x antialiasing, 90 Hz, 6 chunks, anisotropic filtering), with a resolution step and a performance boost in the launcher, plus frame pacing against micro-stutter
+- A Quality setup tuned for the Quest 3 (1.3x resolution, MSAA 4x antialiasing, 90 Hz, 6 chunks, anisotropic filtering), with a resolution step and a performance boost in the launcher
 - Hands, tools and held items stop at blocks; a tool strikes with its tip
 - Chat on the panel in the room, typed with the Quest's own keyboard
 - In-app updates: the launcher shows an **Update** button when a new release is out
