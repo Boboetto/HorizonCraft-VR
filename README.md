@@ -23,8 +23,20 @@ HorizonCraft VR is a standalone APK for the **Meta Quest 3** (for now the only s
 It plays Minecraft: Java Edition 26.3 in VR, with motion controls in the spirit of Vivecraft and QuestCraft.
 
 **1.0** is the first stable release, tested on the Quest 3: a steady 72 Hz with Application SpaceWarp, terrain drawn
-in a few big batches, MSAA 4x that also smooths water, ice, glass, grass and leaves, gestures on Vivecraft's rules and
-in-app updates. 0.3.x installs update in place (worlds stay).
+in a few big batches, MSAA 4x that also smooths water, ice, glass, grass and leaves, gestures on Vivecraft's rules,
+a new launcher with remappable controls and snap turning, and in-app updates. 0.3.x installs update in place (worlds stay).
+
+### New in 1.0
+
+- **New launcher**: a sharp, modern look drawn at the panel's full resolution, a side menu (Home, Skin, Settings,
+  Controls, Mods & packs, Account, Updates) and an update badge on the home page
+- **Controls page**: give any button's action to another button, swap the sticks (left-handed play), smooth or snap
+  turning (30°, 45°, 90°)
+- **Mods & packs page**: install mods and see or remove what is in the mods, resource pack and shader pack folders
+- Swim and glide with the elytra in every direction, where your head points
+- The bow in the right hand, drawn with the left; the arrow flies where the bow points
+- The trident keeps its look while you charge a throw; boats turn smoothly, also on ice
+- Smaller arms and held items; hands no longer pushed back from blocks, so you can dig close up
 
 ## Features
 
@@ -38,20 +50,23 @@ in-app updates. 0.3.x installs update in place (worlds stay).
   way: throw potions, snowballs, eggs and ender pearls with a stroke of the hand, raise a trident beside the head and
   throw it, flick a fishing rod out and back, hold a shield up in front, cock a crossbow with the other hand
 - Menus on a panel in the room with a pointer for each hand, 360° title panorama
-- Walk where you look with the left stick, turn with the right one
-- A Quality setup tuned for the Quest 3 (1.3x resolution, MSAA 4x antialiasing, 90 Hz, 6 chunks, anisotropic filtering), with a resolution step and a performance boost in the launcher
-- Hands, tools and held items stop at blocks; a tool strikes with its tip
+- Walk where you look with the left stick, turn with the right one (smooth or snap; sticks and buttons remappable in the launcher)
+- A Quality setup tuned for the Quest 3 (1.3x resolution, MSAA 4x antialiasing, 72 Hz with SpaceWarp, 6 chunks, anisotropic filtering), with a resolution step and a performance boost in the launcher
+- A tool strikes with its tip
 - Chat on the panel in the room, typed with the Quest's own keyboard
 - In-app updates: the launcher shows an **Update** button when a new release is out
 
 ## Controls
+
+The default controls; the launcher's **Controls** page can give the buttons' actions to other buttons, swap the
+sticks and turn on snap turning.
 
 | Input | In play | In a menu |
 |---|---|---|
 | Left stick | walk (where you look) | – |
 | Right stick | turn | scroll |
 | Right trigger | attack / mine / pick a wrist slot | click with the right pointer |
-| Left trigger | use / place along the left hand | click with the left pointer |
+| Left trigger | use / place along the left hand; with a bow in the right hand: draw the string | click with the left pointer |
 | A | jump | confirm |
 | B | chat (B again closes it) | back; in an inventory or container: quick move (craft all, send the stack to the other side) |
 | Y | inventory | close the inventory |
