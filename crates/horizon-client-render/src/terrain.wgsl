@@ -180,9 +180,13 @@ fn rotated_grid(uv: vec2<f32>, layer: u32, pixel: vec2<f32>, du: vec2<f32>,
     return mix(sum_low * 0.25, sum_high * 0.25, mip_blend);
 }
 // Distant terrain tiles (lod/mesh.rs) count their UVs in blocks past 1: each block takes the
-// sprite again, as separate faces would under the clamped sampler. Sprite UVs in [0, 1] stay.
+// sprite again, as separate faces would under the clamped sampler. Sprite UVs in [0, 1] stay,
+// and so do those a hair past 1: a face's edge interpolates (or, with MSAA, extrapolates) its UV
+// a little over 1, and wrapping it there drew the sprite's top row along the bottom edge of
+// every block, a thin line where a grass or snowy grass block sits on dirt.
+// (The slack is 1/256 of a block.)
 fn tile_uv(uv: vec2<f32>) -> vec2<f32> {
-    return uv - max(ceil(uv) - 1.0, vec2(0.0));
+    return uv - max(ceil(uv - 0.00390625) - 1.0, vec2(0.0));
 }
 fn sprite(tiled: vec2<f32>, layer: u32) -> vec4<f32> {
     // The gradients come from the unwrapped UV, so the mip level holds across block seams.

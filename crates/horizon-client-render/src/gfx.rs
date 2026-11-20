@@ -12972,6 +12972,7 @@ fn xr_hands_caught_up(hand: &[Vertex], spans: &[(u32, u32, bool)], moves: [Optio
     out
 }
 
+#[cfg(target_os = "android")]
 fn xr_eye_view(eye: &horizon_xr::Eye, far: f32) -> View {
     eye_view(eye.rotation, eye.offset, eye.fov, far)
 }
@@ -14601,6 +14602,9 @@ mod tests {
         // A merged face's UV counts blocks: each takes the sprite from its own corner.
         assert_eq!(tile_uv(1.25, 2.0), [0.25, 1.0]);
         assert_eq!(tile_uv(1023.5, 3.75), [0.5, 0.75]);
+        // A block face's edge interpolated a hair past 1 keeps its own edge texels: wrapped,
+        // it drew the sprite's top row as a line along the block's bottom edge.
+        assert_eq!(tile_uv(0.5, 1.001), [0.5, 1.001]);
     }
     #[test]
     fn shader_globals_match_the_rust_layout() {
