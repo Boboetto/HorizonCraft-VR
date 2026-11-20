@@ -49,6 +49,10 @@ public class ProfileActivity extends Activity implements View.OnClickListener {
     private Button copy, browser, advanced, mods;
     private String verifyUri = "https://www.microsoft.com/link";
     private boolean slim;
+    /** The home page's update badge, player card and the page shown. */
+    private TextView badge, homeName, homeAccount;
+    private SkinView homeSkin;
+    private int shown;
 
     private static final int PANEL = Ui.CARD;
     private static final int FIELD = Color.rgb(30, 30, 32);
@@ -75,7 +79,7 @@ public class ProfileActivity extends Activity implements View.OnClickListener {
         LinearLayout head = new LinearLayout(this);
         head.setOrientation(LinearLayout.HORIZONTAL);
         head.setGravity(Gravity.CENTER_VERTICAL);
-        TextView title = Ui.text(this, "HORIZONCRAFT VR", 22, Ui.TEXT, true);
+        TextView title = Ui.text(this, Ui.t("Скин и ник", "Skin and name"), 22, Ui.TEXT, true);
         title.setLetterSpacing(0.06f);
         head.addView(title, new LinearLayout.LayoutParams(0, -2, 1));
         TextView ver = Ui.text(this, version(), 12, Ui.MUTED, false);
@@ -107,6 +111,13 @@ public class ProfileActivity extends Activity implements View.OnClickListener {
         name.setImeOptions(android.view.inputmethod.EditorInfo.IME_ACTION_DONE
                 | android.view.inputmethod.EditorInfo.IME_FLAG_NO_EXTRACT_UI);
         name.setText(readName());
+        name.addTextChangedListener(new android.text.TextWatcher() {
+            public void beforeTextChanged(CharSequence t, int a, int b, int c) {}
+            public void onTextChanged(CharSequence t, int a, int b, int c) {}
+            public void afterTextChanged(android.text.Editable e) {
+                showHomeName();
+            }
+        });
         side.addView(name);
         pick = Ui.button(this, Ui.t("Скин…", "Skin…"), false);
         pick.setOnClickListener(this);
@@ -214,6 +225,8 @@ public class ProfileActivity extends Activity implements View.OnClickListener {
                     return;
                 }
                 updateStatus.setText(Ui.t("Доступна новая версия ", "New version available: ") + release.version);
+                badge.setText(Ui.t("Обновление ", "Update ") + release.version);
+                badge.setVisibility(View.VISIBLE);
                 update.setText(Ui.t("Обновить до ", "Update to ") + release.version);
                 update.setVisibility(View.VISIBLE);
                 update.setOnClickListener(new View.OnClickListener() {
@@ -365,100 +378,156 @@ public class ProfileActivity extends Activity implements View.OnClickListener {
         mods = Ui.button(this, Ui.t("Установить мод", "Install a mod"), false);
         mods.setOnClickListener(this);
         card.addView(mods, Ui.gap(this, 8));
+        packsBox = new LinearLayout(this);
+        packsBox.setOrientation(LinearLayout.VERTICAL);
+        card.addView(packsBox, Ui.gap(this, 4));
+        fillPacks();
 
-        // A launcher's classic layout: a menu down the left that folds to its icons, and the
-        // pages beside it. The home page is the night-sky picture with Play in a bar below.
+        // The layout: a menu down the left (icons and names), the pages beside it. The home
+        // page is the night landscape with the player's card and Play at the bottom, and the
+        // update badge at the top right.
         root.setPadding(0, 0, 0, 0);
-        // Stone bricks behind the pages, smooth slabs for the menu and the Play bar.
-        root.setBackground(Ui.stone(this, true, 26));
+        root.setBackground(Ui.sunset(this));
         final FrameLayout content = new FrameLayout(this);
-        LinearLayout home = new LinearLayout(this);
-        home.setOrientation(LinearLayout.VERTICAL);
-        FrameLayout hero = new FrameLayout(this);
-        hero.setBackground(Ui.sunset(this));
-        TextView brand = Ui.text(this, "HORIZONCRAFT VR", 34, Ui.TEXT, true);
-        brand.setLetterSpacing(0.1f);
-        brand.setGravity(Gravity.CENTER);
-        hero.addView(brand, new FrameLayout.LayoutParams(-1, -2, Gravity.CENTER_HORIZONTAL | Gravity.TOP));
-        ((FrameLayout.LayoutParams) brand.getLayoutParams()).topMargin = Ui.dp(this, 40);
-        home.addView(hero, new LinearLayout.LayoutParams(-1, 0, 1));
+        FrameLayout home = new FrameLayout(this);
+        // Top: the name and, on the right, the badge for a new version.
+        LinearLayout top = new LinearLayout(this);
+        top.setOrientation(LinearLayout.HORIZONTAL);
+        top.setGravity(Gravity.CENTER_VERTICAL);
+        top.setPadding(Ui.dp(this, 28), Ui.dp(this, 22), Ui.dp(this, 22), 0);
+        LinearLayout brandBox = new LinearLayout(this);
+        brandBox.setOrientation(LinearLayout.VERTICAL);
+        TextView brand = Ui.text(this, "HorizonCraft VR", 34, Ui.TEXT, true);
+        brand.setLetterSpacing(0.02f);
+        brand.setShadowLayer(Ui.dp(this, 8), 0, Ui.dp(this, 2), Color.argb(160, 0, 0, 0));
+        brandBox.addView(brand);
+        TextView tagline = Ui.text(this, "Minecraft: Java Edition 26.3 · Meta Quest 3", 14, Ui.MUTED, false);
+        brandBox.addView(tagline);
+        top.addView(brandBox, new LinearLayout.LayoutParams(0, -2, 1));
+        badge = new TextView(this);
+        badge.setTextSize(14);
+        badge.setTextColor(Color.WHITE);
+        badge.setTypeface(android.graphics.Typeface.create("sans-serif-medium", android.graphics.Typeface.NORMAL));
+        badge.setGravity(Gravity.CENTER);
+        badge.setPadding(Ui.dp(this, 16), Ui.dp(this, 8), Ui.dp(this, 16), Ui.dp(this, 8));
+        badge.setBackground(Ui.pressable(this, Ui.GREEN, 0, 20));
+        badge.setCompoundDrawablePadding(Ui.dp(this, 8));
+        badge.setCompoundDrawables(Ui.icon(this, Ui.Glyph.UPDATES, Color.WHITE, 18), null, null, null);
+        badge.setVisibility(View.GONE);
+        top.addView(badge, new LinearLayout.LayoutParams(-2, -2));
+        home.addView(top, new FrameLayout.LayoutParams(-1, -2, Gravity.TOP));
+        // Bottom: the player's card and Play.
         LinearLayout bar = new LinearLayout(this);
         bar.setOrientation(LinearLayout.HORIZONTAL);
         bar.setGravity(Gravity.CENTER_VERTICAL);
-        bar.setBackground(Ui.framed(this, Ui.stone(this, false, 20), 1));
-        bar.setPadding(Ui.dp(this, 20), Ui.dp(this, 10), Ui.dp(this, 20), Ui.dp(this, 10));
+        bar.setBackground(Ui.rounded(this, Ui.CARD, Ui.EDGE, 20));
+        bar.setElevation(Ui.dp(this, 8));
+        bar.setPadding(Ui.dp(this, 14), Ui.dp(this, 14), Ui.dp(this, 14), Ui.dp(this, 14));
+        homeSkin = new SkinView(this);
+        homeSkin.setBackground(Ui.rounded(this, FIELD, 0, 12));
+        int hs = Ui.dp(this, 6);
+        homeSkin.setPadding(hs, hs, hs, hs);
+        bar.addView(homeSkin, new LinearLayout.LayoutParams(Ui.dp(this, 56), Ui.dp(this, 84)));
         LinearLayout info = new LinearLayout(this);
         info.setOrientation(LinearLayout.VERTICAL);
-        info.addView(Ui.text(this, "HorizonCraft VR " + version(), 14, Ui.TEXT, true));
+        info.setPadding(Ui.dp(this, 14), 0, Ui.dp(this, 14), 0);
+        homeName = Ui.text(this, "", 18, Ui.TEXT, true);
+        info.addView(homeName);
+        homeAccount = Ui.text(this, "", 13, Ui.MUTED, false);
+        info.addView(homeAccount);
         info.addView(message);
         bar.addView(info, new LinearLayout.LayoutParams(0, -2, 1));
-        bar.addView(play, new LinearLayout.LayoutParams(Ui.dp(this, 260), Ui.dp(this, 64)));
-        home.addView(bar, new LinearLayout.LayoutParams(-1, -2));
-        left.setPadding(Ui.dp(this, 24), Ui.dp(this, 24), Ui.dp(this, 24), Ui.dp(this, 24));
-        left.setBackground(Ui.rounded(this, Ui.CARD, Ui.EDGE, 0));
-        final View[] pages = {home, left, wrap(settingsBox), wrap(accountBox), wrap(updatesBox), wrap(modsBox)};
-        final String[][] items = {
-            {"\u2302", Ui.t("Главная", "Home")},
-            // Skins: a coat hanger (drawn, `hanger`; no character has one).
-            {"\uFFFC", Ui.t("Скин", "Skin")},
-            {"\u2699", Ui.t("Настройки", "Settings")},
-            {"\u2709", Ui.t("Аккаунт", "Account")},
-            {"\u21BB", Ui.t("Обновления", "Updates")},
-            {"\u2726", Ui.t("Моды", "Mods")},
+        play.setText(Ui.t("  ИГРАТЬ", "  PLAY"));
+        play.setTextSize(22);
+        play.setLetterSpacing(0.12f);
+        play.setCompoundDrawables(Ui.icon(this, Ui.Glyph.PLAY, Color.WHITE, 22), null, null, null);
+        play.setPadding(Ui.dp(this, 28), 0, Ui.dp(this, 32), 0);
+        play.setBackground(Ui.pressable(this, Ui.GREEN, 0, 14));
+        play.setTextColor(Color.WHITE);
+        bar.addView(play, new LinearLayout.LayoutParams(Ui.dp(this, 240), Ui.dp(this, 68)));
+        FrameLayout.LayoutParams barLp = new FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM);
+        int bm = Ui.dp(this, 22);
+        barLp.setMargins(bm, bm, bm, bm);
+        home.addView(bar, barLp);
+        left.setPadding(Ui.dp(this, 24), Ui.dp(this, 20), Ui.dp(this, 24), Ui.dp(this, 24));
+        left.setBackground(Ui.rounded(this, Ui.CARD, Ui.EDGE, 20));
+        FrameLayout skinPage = new FrameLayout(this);
+        int sm = Ui.dp(this, 20);
+        skinPage.setPadding(sm, sm, sm, sm);
+        skinPage.addView(left, new FrameLayout.LayoutParams(-1, -1));
+        final View[] pages = {home, skinPage, wrap(settingsBox), wrap(controlsPage()), wrap(modsBox), wrap(accountBox), wrap(updatesBox)};
+        final Ui.Glyph[] glyphs = {Ui.Glyph.HOME, Ui.Glyph.SKIN, Ui.Glyph.SETTINGS, Ui.Glyph.CONTROLS, Ui.Glyph.MODS, Ui.Glyph.ACCOUNT, Ui.Glyph.UPDATES};
+        final String[] names = {
+            Ui.t("Главная", "Home"),
+            Ui.t("Скин", "Skin"),
+            Ui.t("Настройки", "Settings"),
+            Ui.t("Управление", "Controls"),
+            Ui.t("Моды и паки", "Mods & packs"),
+            Ui.t("Аккаунт", "Account"),
+            Ui.t("Обновления", "Updates"),
         };
         for (View page : pages) content.addView(page, new FrameLayout.LayoutParams(-1, -1));
-        final LinearLayout menu = new LinearLayout(this);
+        LinearLayout menu = new LinearLayout(this);
         menu.setOrientation(LinearLayout.VERTICAL);
-        menu.setBackground(Ui.framed(this, Ui.stone(this, false, 15), 1));
-        menu.setPadding(Ui.dp(this, 6), Ui.dp(this, 6), Ui.dp(this, 6), Ui.dp(this, 6));
-        final Button fold = Ui.button(this, "\u2630", false);
-        menu.addView(fold, new LinearLayout.LayoutParams(-1, Ui.dp(this, 52)));
-        final Button[] entries = new Button[items.length];
-        final boolean[] open = {false};
-        final int[] shown = {0};
+        menu.setBackgroundColor(Color.argb(235, 16, 20, 27));
+        menu.setPadding(Ui.dp(this, 12), Ui.dp(this, 18), Ui.dp(this, 12), Ui.dp(this, 12));
+        menu.setElevation(Ui.dp(this, 6));
+        LinearLayout logo = new LinearLayout(this);
+        logo.setOrientation(LinearLayout.HORIZONTAL);
+        logo.setGravity(Gravity.CENTER_VERTICAL);
+        logo.setPadding(Ui.dp(this, 10), 0, 0, Ui.dp(this, 16));
+        View mark = new View(this);
+        mark.setBackground(Ui.rounded(this, Ui.GREEN, 0, 6));
+        logo.addView(mark, new LinearLayout.LayoutParams(Ui.dp(this, 22), Ui.dp(this, 22)));
+        TextView logoText = Ui.text(this, "HorizonCraft", 17, Ui.TEXT, true);
+        logoText.setPadding(Ui.dp(this, 10), 0, 0, 0);
+        logo.addView(logoText);
+        menu.addView(logo);
+        final TextView[] entries = new TextView[pages.length];
         final Runnable refresh = new Runnable() {
             public void run() {
                 for (int i = 0; i < pages.length; i++) {
-                    pages[i].setVisibility(i == shown[0] ? View.VISIBLE : View.GONE);
-                    String label = open[0] ? items[i][0] + "   " + items[i][1] : items[i][0];
-                    if (i == 1) {
-                        android.text.SpannableString text = new android.text.SpannableString(label);
-                        text.setSpan(new android.text.style.ImageSpan(hanger(i == shown[0] ? Color.BLACK : Color.WHITE),
-                                android.text.style.DynamicDrawableSpan.ALIGN_BASELINE), 0, 1, 0);
-                        entries[i].setText(text);
-                    } else {
-                        entries[i].setText(label);
-                    }
-                    entries[i].setGravity(open[0] ? Gravity.CENTER_VERTICAL | Gravity.START : Gravity.CENTER);
-                    entries[i].setTextColor(i == shown[0] ? Color.BLACK : Color.WHITE);
-                    entries[i].setBackground(i == shown[0]
-                            ? new Ui.Bevel(Ui.dp(ProfileActivity.this, 2), Color.WHITE, Ui.EDGE, false)
-                            : new Ui.Bevel(Ui.dp(ProfileActivity.this, 2), Ui.STONE, Ui.EDGE, false));
+                    boolean on = i == shown;
+                    pages[i].setVisibility(on ? View.VISIBLE : View.GONE);
+                    entries[i].setTextColor(on ? Ui.TEXT : Ui.MUTED);
+                    entries[i].setCompoundDrawables(Ui.icon(ProfileActivity.this, glyphs[i], on ? Ui.GREEN : Ui.MUTED, 22), null, null, null);
+                    entries[i].setBackground(on
+                            ? Ui.pressable(ProfileActivity.this, Ui.STONE, 0, 12)
+                            : Ui.pressable(ProfileActivity.this, Color.argb(0, 16, 20, 27), 0, 12));
                 }
-                menu.getLayoutParams().width = Ui.dp(ProfileActivity.this, open[0] ? 210 : 68);
-                menu.requestLayout();
             }
         };
-        for (int i = 0; i < items.length; i++) {
+        for (int i = 0; i < pages.length; i++) {
             final int index = i;
-            entries[i] = Ui.button(this, items[i][0], false);
-            entries[i].setTextSize(18);
-            entries[i].setOnClickListener(new View.OnClickListener() {
+            TextView entry = Ui.text(this, names[i], 15, Ui.MUTED, true);
+            entry.setGravity(Gravity.CENTER_VERTICAL);
+            entry.setCompoundDrawablePadding(Ui.dp(this, 14));
+            entry.setPadding(Ui.dp(this, 14), 0, Ui.dp(this, 10), 0);
+            entry.setClickable(true);
+            entry.setFocusable(true);
+            entry.setOnClickListener(new View.OnClickListener() {
                 public void onClick(View v) {
-                    shown[0] = index;
+                    shown = index;
                     refresh.run();
                 }
             });
-            menu.addView(entries[i], new LinearLayout.LayoutParams(-1, Ui.dp(this, 52)));
-            ((LinearLayout.LayoutParams) entries[i].getLayoutParams()).topMargin = Ui.dp(this, 6);
+            entries[i] = entry;
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, Ui.dp(this, 50));
+            lp.topMargin = Ui.dp(this, 4);
+            menu.addView(entry, lp);
         }
-        fold.setOnClickListener(new View.OnClickListener() {
+        View spacer = new View(this);
+        menu.addView(spacer, new LinearLayout.LayoutParams(-1, 0, 1));
+        TextView menuVersion = Ui.text(this, "HorizonCraft VR " + version(), 12, Ui.MUTED, false);
+        menuVersion.setPadding(Ui.dp(this, 10), 0, 0, 0);
+        menu.addView(menuVersion);
+        badge.setOnClickListener(new View.OnClickListener() {
             public void onClick(View v) {
-                open[0] = !open[0];
+                shown = pages.length - 1;
                 refresh.run();
             }
         });
-        root.addView(menu, new LinearLayout.LayoutParams(Ui.dp(this, 68), -1));
+        root.addView(menu, new LinearLayout.LayoutParams(Ui.dp(this, 220), -1));
         root.addView(content, new LinearLayout.LayoutParams(0, -1, 1));
         refresh.run();
         setContentView(root);
@@ -466,6 +535,14 @@ public class ProfileActivity extends Activity implements View.OnClickListener {
         refreshAccount();
         updateModel();
         showPreview();
+    }
+
+    /** The name on the home page's card: the typed one, else the game's own default. */
+    private void showHomeName() {
+        if (homeName == null) return;
+        String n = Msa.signedIn(this);
+        if (n.isEmpty()) n = name.getText().toString().trim();
+        homeName.setText(n.isEmpty() ? "Player" : n);
     }
 
     @Override
@@ -496,7 +573,7 @@ public class ProfileActivity extends Activity implements View.OnClickListener {
         ScrollView scroll = new ScrollView(this);
         scroll.setVerticalScrollBarEnabled(false);
         // A dark panel over the stone bricks, so the text reads.
-        box.setBackground(Ui.rounded(this, Ui.CARD, Ui.EDGE, 0));
+        box.setBackground(Ui.rounded(this, Ui.CARD, Ui.EDGE, 20));
         FrameLayout frame = new FrameLayout(this);
         int m = Ui.dp(this, 20);
         frame.setPadding(m, m, m, m);
@@ -505,38 +582,214 @@ public class ProfileActivity extends Activity implements View.OnClickListener {
         return scroll;
     }
 
-    /** A coat hanger in `color`, the size of the menu's 18sp glyphs: the skin section's icon. */
-    private android.graphics.drawable.Drawable hanger(final int color) {
-        final int size = Ui.dp(this, 22);
-        android.graphics.drawable.Drawable d = new android.graphics.drawable.Drawable() {
-            public void draw(android.graphics.Canvas c) {
-                android.graphics.Paint p = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
-                p.setColor(color);
-                p.setStyle(android.graphics.Paint.Style.STROKE);
-                p.setStrokeCap(android.graphics.Paint.Cap.ROUND);
-                p.setStrokeJoin(android.graphics.Paint.Join.ROUND);
-                float u = size / 24f;
-                p.setStrokeWidth(2.2f * u);
-                android.graphics.Path path = new android.graphics.Path();
-                // The hook: from the neck up round to its tip.
-                path.moveTo(12 * u, 10 * u);
-                path.lineTo(12 * u, 8.5f * u);
-                path.arcTo(new android.graphics.RectF(9.5f * u, 3 * u, 14.5f * u, 8 * u), 90, -270);
-                // The shoulders and the bar.
-                path.moveTo(12 * u, 10 * u);
-                path.lineTo(2 * u, 18 * u);
-                path.lineTo(22 * u, 18 * u);
-                path.close();
-                c.drawPath(path, p);
+    private LinearLayout packsBox;
+
+    /** What is installed, folder by folder, each file with a button to remove it. */
+    private void fillPacks() {
+        if (packsBox == null) return;
+        packsBox.removeAllViews();
+        String[][] folders = {
+            {"mods", Ui.t("Моды (.hnmod)", "Mods (.hnmod)")},
+            {"horizon-mods", Ui.t("Моды контента (.hmod)", "Content mods (.hmod)")},
+            {"resourcepacks", Ui.t("Ресурспаки", "Resource packs")},
+            {"shaderpacks", Ui.t("Шейдеры", "Shader packs")},
+        };
+        for (String[] folder : folders) {
+            Ui.section(packsBox, folder[1]);
+            File[] files = new File(dir, folder[0]).listFiles();
+            if (files != null) java.util.Arrays.sort(files);
+            int shownFiles = 0;
+            for (final File f : files == null ? new File[0] : files) {
+                if (f.getName().startsWith(".")) continue;
+                shownFiles++;
+                LinearLayout row = new LinearLayout(this);
+                row.setOrientation(LinearLayout.HORIZONTAL);
+                row.setGravity(Gravity.CENTER_VERTICAL);
+                row.setPadding(Ui.dp(this, 14), Ui.dp(this, 6), Ui.dp(this, 6), Ui.dp(this, 6));
+                row.setBackground(Ui.rounded(this, FIELD, 0, 10));
+                LinearLayout names = new LinearLayout(this);
+                names.setOrientation(LinearLayout.VERTICAL);
+                names.addView(Ui.text(this, f.getName(), 14, Ui.TEXT, true));
+                long kb = f.isDirectory() ? 0 : Math.max(1, f.length() / 1024);
+                names.addView(Ui.text(this, f.isDirectory() ? Ui.t("папка", "folder") : (kb >= 1024 ? kb / 1024 + " MB" : kb + " KB"), 12, Ui.MUTED, false));
+                row.addView(names, new LinearLayout.LayoutParams(0, -2, 1));
+                final Button remove = Ui.button(this, Ui.t("Удалить", "Remove"), false);
+                remove.setMinHeight(Ui.dp(this, 38));
+                remove.setOnClickListener(new View.OnClickListener() {
+                    public void onClick(View v) {
+                        // A second press removes it: no file goes on one stray click.
+                        if (remove.getTag() == null) {
+                            remove.setTag(Boolean.TRUE);
+                            remove.setText(Ui.t("Точно удалить?", "Remove for good?"));
+                            remove.setTextColor(Ui.WARN);
+                            return;
+                        }
+                        deleteAll(f);
+                        fillPacks();
+                    }
+                });
+                row.addView(remove, new LinearLayout.LayoutParams(-2, -2));
+                packsBox.addView(row, Ui.gap(this, 6));
             }
-            public void setAlpha(int alpha) {}
-            public void setColorFilter(android.graphics.ColorFilter filter) {}
-            public int getOpacity() {
-                return android.graphics.PixelFormat.TRANSLUCENT;
+            if (shownFiles == 0) packsBox.addView(Ui.text(this, Ui.t("Пусто", "Nothing here yet"), 13, Ui.MUTED, false));
+        }
+        packsBox.addView(Ui.text(this, Ui.t(
+                "Ресурспаки и шейдеры включаются в игре (Настройки → Пакеты ресурсов). Файлы можно положить в Android/data/dev.horizonlab.horizon/files/ через приложение Файлы.",
+                "Resource packs and shaders are turned on in the game (Options → Resource Packs). Files can also be copied into Android/data/dev.horizonlab.horizon/files/ with the Files app."),
+                12, Ui.MUTED, false), Ui.gap(this, 12));
+    }
+
+    private static void deleteAll(File f) {
+        File[] inside = f.listFiles();
+        if (inside != null) for (File c : inside) deleteAll(c);
+        f.delete();
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        // A mod installed meanwhile (ModImportActivity) shows in the list.
+        fillPacks();
+    }
+
+    /** horizon-controls.txt in the game folder: the controls page's choices (android_main). */
+    private File controlsFile() {
+        return new File(dir, "horizon-controls.txt");
+    }
+
+    /** The physical buttons, in horizon-xr's `BUTTON_NAMES` order. */
+    private static final String[] BUTTON_KEYS = {"a", "b", "x", "y", "lstick", "rstick", "lgrip", "rgrip"};
+
+    private static String buttonName(int i) {
+        String[] names = {"A", "B", "X", "Y", Ui.t("Клик левого стика", "Left stick click"),
+            Ui.t("Клик правого стика", "Right stick click"), Ui.t("Левый хват", "Left grip"), Ui.t("Правый хват", "Right grip")};
+        return names[i];
+    }
+
+    /** The controls page: each job's button (a press gives it the next one, swapped with
+     * the job that had it, so every job keeps a button), the sticks and the turning. */
+    private LinearLayout controlsPage() {
+        final LinearLayout box = page();
+        final int[] buttons = {0, 1, 2, 3, 4, 5, 6, 7};
+        final boolean[] swap = {false};
+        final int[] snap = {0};
+        try {
+            for (String line : new String(Files.readAllBytes(controlsFile().toPath()), StandardCharsets.UTF_8).split("\n")) {
+                String[] kv = line.trim().split("=", 2);
+                if (kv.length != 2) continue;
+                if (kv[0].equals("sticks")) swap[0] = kv[1].trim().equals("swap");
+                else if (kv[0].equals("snap")) snap[0] = Integer.parseInt(kv[1].trim());
+                else {
+                    int job = java.util.Arrays.asList(BUTTON_KEYS).indexOf(kv[0].trim());
+                    int button = java.util.Arrays.asList(BUTTON_KEYS).indexOf(kv[1].trim());
+                    if (job >= 0 && button >= 0) buttons[job] = button;
+                }
+            }
+        } catch (Exception ignored) {
+            // No file yet: the default controls.
+        }
+        final String[] jobs = {
+            Ui.t("Прыжок", "Jump"),
+            Ui.t("Чат / назад · быстрый перенос в инвентаре", "Chat / back · quick move in inventories"),
+            Ui.t("Выбросить предмет", "Drop item"),
+            Ui.t("Инвентарь", "Inventory"),
+            Ui.t("Бег", "Sprint"),
+            Ui.t("Присесть", "Sneak"),
+            Ui.t("Сменить руку · половина стака в меню", "Swap hands · half a stack in menus"),
+            Ui.t("Один предмет в меню · Shift-клик", "Place one in menus · shift-click"),
+        };
+        Ui.section(box, Ui.t("Кнопки", "Buttons"));
+        box.addView(Ui.text(this, Ui.t(
+                "Нажмите на кнопку справа, чтобы дать действию другую кнопку. Действие, у которого она была, получит прежнюю. Применяется при следующем запуске игры.",
+                "Press the button on the right to give that action another button; the action that had it takes the old one. Applies the next time the game starts."),
+                12, Ui.MUTED, false));
+        final Button[] choice = new Button[jobs.length];
+        final Button swapButton = Ui.button(this, "", false);
+        final Button snapButton = Ui.button(this, "", false);
+        final Runnable save = new Runnable() {
+            public void run() {
+                StringBuilder out = new StringBuilder();
+                for (int i = 0; i < buttons.length; i++) {
+                    if (buttons[i] != i) out.append(BUTTON_KEYS[i]).append('=').append(BUTTON_KEYS[buttons[i]]).append('\n');
+                }
+                if (swap[0]) out.append("sticks=swap\n");
+                if (snap[0] > 0) out.append("snap=").append(snap[0]).append('\n');
+                try {
+                    write(controlsFile(), out.toString().getBytes(StandardCharsets.UTF_8));
+                } catch (Exception e) {
+                    message.setText(Ui.t("Не удалось сохранить.", "Could not save."));
+                }
+                for (int i = 0; i < choice.length; i++) {
+                    choice[i].setText(buttonName(buttons[i]));
+                    choice[i].setTextColor(buttons[i] != i ? Ui.GREEN : Ui.TEXT);
+                }
+                swapButton.setText(swap[0]
+                        ? Ui.t("Ходьба: правый стик, поворот: левый", "Walk: right stick · turn: left stick")
+                        : Ui.t("Ходьба: левый стик, поворот: правый", "Walk: left stick · turn: right stick"));
+                snapButton.setText(snap[0] == 0
+                        ? Ui.t("Поворот: плавный", "Turning: smooth")
+                        : Ui.t("Поворот: рывком ", "Turning: snap ") + snap[0] + "°");
             }
         };
-        d.setBounds(0, 0, size, size);
-        return d;
+        for (int i = 0; i < jobs.length; i++) {
+            final int job = i;
+            LinearLayout row = new LinearLayout(this);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            row.setGravity(Gravity.CENTER_VERTICAL);
+            row.addView(Ui.text(this, jobs[i], 14, Ui.TEXT, false), new LinearLayout.LayoutParams(0, -2, 1));
+            choice[i] = Ui.button(this, "", false);
+            choice[i].setOnClickListener(new View.OnClickListener() {
+                public void onClick(View v) {
+                    int next = (buttons[job] + 1) % buttons.length;
+                    for (int other = 0; other < buttons.length; other++) {
+                        if (buttons[other] == next) buttons[other] = buttons[job];
+                    }
+                    buttons[job] = next;
+                    save.run();
+                }
+            });
+            row.addView(choice[i], new LinearLayout.LayoutParams(Ui.dp(this, 200), -2));
+            box.addView(row, Ui.gap(this, 6));
+        }
+        box.addView(Ui.text(this, Ui.t(
+                "Курки всегда: правый — атака и выбор, левый — использовать. Кнопка меню — пауза.",
+                "The triggers stay as they are: right attacks and picks, left uses. The menu button pauses."),
+                12, Ui.MUTED, false), Ui.gap(this, 6));
+        Ui.section(box, Ui.t("Стики и поворот", "Sticks and turning"));
+        swapButton.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                swap[0] = !swap[0];
+                save.run();
+            }
+        });
+        box.addView(swapButton, Ui.gap(this, 4));
+        box.addView(Ui.text(this, Ui.t("Для левшей: ходьба правым стиком.", "For left-handed players: walk with the right stick."), 12, Ui.MUTED, false));
+        snapButton.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                int[] steps = {0, 30, 45, 90};
+                int at = 0;
+                for (int i = 0; i < steps.length; i++) if (steps[i] == snap[0]) at = i;
+                snap[0] = steps[(at + 1) % steps.length];
+                save.run();
+            }
+        });
+        box.addView(snapButton, Ui.gap(this, 8));
+        box.addView(Ui.text(this, Ui.t(
+                "Поворот рывком меньше укачивает: стик в сторону поворачивает сразу на шаг.",
+                "Snap turning is easier on the stomach: the stick pushed aside turns at once by the step."),
+                12, Ui.MUTED, false));
+        final Button reset = Ui.button(this, Ui.t("Вернуть управление по умолчанию", "Restore the default controls"), false);
+        reset.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                for (int i = 0; i < buttons.length; i++) buttons[i] = i;
+                swap[0] = false;
+                snap[0] = 0;
+                save.run();
+            }
+        });
+        box.addView(reset, Ui.gap(this, 16));
+        save.run();
+        return box;
     }
 
     /** horizon-vr.txt in the game folder: the VR settings the game reads at start (android_main). */
@@ -692,6 +945,11 @@ public class ProfileActivity extends Activity implements View.OnClickListener {
         microsoft.setVisibility(n.isEmpty() ? View.VISIBLE : View.GONE);
         accountChip.setText(n.isEmpty() ? Ui.t("● Без лицензии (офлайн)", "● Offline (no license)") : Ui.t("● Лицензия: ", "● Licensed: ") + n);
         accountChip.setTextColor(n.isEmpty() ? Ui.MUTED : Ui.GREEN);
+        if (homeAccount != null) {
+            homeAccount.setText(accountChip.getText());
+            homeAccount.setTextColor(n.isEmpty() ? Ui.MUTED : Ui.GREEN);
+        }
+        showHomeName();
     }
 
     /** Saves the name and arm model; false (with a message) for a bad name. */
@@ -1007,5 +1265,6 @@ public class ProfileActivity extends Activity implements View.OnClickListener {
             }
         }
         preview.set(skin, slim);
+        if (homeSkin != null) homeSkin.set(skin, slim);
     }
 }

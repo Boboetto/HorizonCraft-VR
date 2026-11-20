@@ -1,12 +1,21 @@
 package dev.horizonlab.horizon;
 
 import android.content.Context;
+import android.content.res.ColorStateList;
 import android.graphics.Canvas;
 import android.graphics.Color;
+import android.graphics.LinearGradient;
 import android.graphics.Paint;
+import android.graphics.Path;
+import android.graphics.RadialGradient;
+import android.graphics.Rect;
 import android.graphics.RectF;
+import android.graphics.Shader;
 import android.graphics.Typeface;
+import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
+import android.graphics.drawable.RippleDrawable;
+import android.graphics.drawable.StateListDrawable;
 import android.view.Gravity;
 import android.view.View;
 import android.widget.Button;
@@ -16,22 +25,25 @@ import android.widget.TextView;
 import java.util.Locale;
 
 /**
- * Shared look of HorizonCraft VR's setup and profile screens, in the spirit of a block game's
- * menus: a pixel-block background, square panels and buttons with a raised bevel, a green
- * play button and text with a hard drop shadow. Everything is drawn here: no game art.
+ * Shared look of HorizonCraft VR's setup and launcher screens: a dark, modern theme with one
+ * green accent, rounded cards and buttons, line icons and a night landscape, all drawn as
+ * vectors at the panel's full resolution (no scaled-up bitmaps, so it stays sharp in the
+ * headset). Everything is drawn here: no game art.
  */
 final class Ui {
-    // Black and white: dark translucent panels over the pixel night sky, white outlines,
-    // a white play button.
-    static final int BG = Color.rgb(8, 8, 10);
-    static final int CARD = Color.argb(215, 10, 10, 12);
-    static final int EDGE = Color.rgb(232, 232, 232);
-    static final int GREEN = Color.rgb(240, 240, 240);
-    static final int GREEN_DARK = Color.rgb(150, 150, 150);
-    static final int STONE = Color.rgb(36, 36, 40);
-    static final int TEXT = Color.rgb(246, 246, 246);
-    static final int MUTED = Color.rgb(170, 170, 170);
-    static final int WARN = Color.rgb(255, 255, 255);
+    static final int BG = Color.rgb(13, 16, 22);
+    /** Cards and panels, a little see-through over the landscape. */
+    static final int CARD = Color.argb(236, 22, 27, 35);
+    /** Fields, secondary buttons, the selected menu entry. */
+    static final int STONE = Color.rgb(33, 40, 51);
+    /** Outlines. */
+    static final int EDGE = Color.rgb(48, 58, 72);
+    /** The accent: Play, the selected entry's marker, what is on. */
+    static final int GREEN = Color.rgb(46, 175, 92);
+    static final int GREEN_DARK = Color.rgb(30, 120, 64);
+    static final int TEXT = Color.rgb(236, 240, 245);
+    static final int MUTED = Color.rgb(146, 156, 170);
+    static final int WARN = Color.rgb(242, 184, 64);
     static final int SHADOW = Color.rgb(0, 0, 0);
 
     private Ui() {}
@@ -48,11 +60,6 @@ final class Ui {
         return (int) (v * c.getResources().getDisplayMetrics().density + 0.5f);
     }
 
-    /** A square panel with a dark outline and a raised bevel (the radius is ignored). */
-    static android.graphics.drawable.Drawable rounded(Context c, int fill, int stroke, float radius) {
-        return new Bevel(dp(c, 2), fill, stroke != 0 ? EDGE : 0, false);
-    }
-
     static int shade(int color, float by) {
         return Color.argb(Color.alpha(color),
                 Math.max(0, Math.min(255, (int) (Color.red(color) * by))),
@@ -60,142 +67,206 @@ final class Ui {
                 Math.max(0, Math.min(255, (int) (Color.blue(color) * by))));
     }
 
-    /** Fill, a lighter top and left edge, a darker bottom and right one, an outline. */
-    static final class Bevel extends android.graphics.drawable.Drawable {
-        private final Paint paint = new Paint();
-        private final int px, fill, outline;
-        private final boolean sunken;
-
-        Bevel(int px, int fill, int outline, boolean sunken) {
-            this.px = Math.max(1, px);
-            this.fill = fill;
-            this.outline = outline;
-            this.sunken = sunken;
-        }
-
-        @Override
-        public void draw(Canvas canvas) {
-            android.graphics.Rect b = getBounds();
-            int l = b.left, t = b.top, r = b.right, bo = b.bottom;
-            if (outline != 0) {
-                paint.setColor(outline);
-                canvas.drawRect(l, t, r, bo, paint);
-                l += px; t += px; r -= px; bo -= px;
-            }
-            paint.setColor(shade(fill, sunken ? 0.6f : 1.35f));
-            canvas.drawRect(l, t, r, bo, paint);
-            paint.setColor(shade(fill, sunken ? 1.35f : 0.6f));
-            canvas.drawRect(l + px, t + px, r, bo, paint);
-            paint.setColor(fill);
-            canvas.drawRect(l + px, t + px, r - px, bo - px, paint);
-        }
-
-        @Override public void setAlpha(int alpha) {}
-        @Override public void setColorFilter(android.graphics.ColorFilter f) {}
-        @Override public int getOpacity() { return android.graphics.PixelFormat.TRANSLUCENT; }
+    static int alpha(int color, int a) {
+        return Color.argb(a, Color.red(color), Color.green(color), Color.blue(color));
     }
 
-    /**
-     * A pixel sunset under a starry night, in black and white: the sky darkens from a pale glow
-     * at the horizon to black, white stars above, a white sun half set behind black blocky
-     * hills. Drawn at 192x108 and scaled up without smoothing.
-     */
-    static android.graphics.drawable.Drawable sunset(Context c) {
-        int w = 192, h = 108, horizon = 80;
-        android.graphics.Bitmap sky = android.graphics.Bitmap.createBitmap(w, h, android.graphics.Bitmap.Config.ARGB_8888);
-        java.util.Random random = new java.util.Random(26);
-        for (int y = 0; y < h; y++) {
-            // Bands of 4 pixels, as a block game's sky would be.
-            float t = Math.min(1f, (y / 4 * 4) / (float) horizon);
-            int g = (int) (6 + 150 * t * t * t);
-            for (int x = 0; x < w; x++) sky.setPixel(x, y, Color.rgb(g, g, g));
-        }
-        for (int i = 0; i < 90; i++) {
-            int x = random.nextInt(w), y = random.nextInt(horizon - 30);
-            int v = random.nextInt(3) == 0 ? 255 : 150 + random.nextInt(60);
-            sky.setPixel(x, y, Color.rgb(v, v, v));
-        }
-        // The sun: a square sinking at the horizon, its lower half behind the hills.
-        for (int y = horizon - 20; y < horizon; y++)
-            for (int x = 124; x < 144; x++) sky.setPixel(x, y, Color.rgb(250, 250, 250));
-        // Blocky hills, 4-pixel columns, low enough to leave the sun's top half.
-        int top = horizon - 4;
-        for (int x = 0; x < w; x += 4) {
-            top = Math.max(horizon - 10, Math.min(horizon + 2, top + (random.nextInt(3) - 1) * 4));
-            for (int y = top; y < h; y++)
-                for (int dx = 0; dx < 4 && x + dx < w; dx++) sky.setPixel(x + dx, y, Color.rgb(4, 4, 6));
-        }
-        android.graphics.drawable.BitmapDrawable d = new android.graphics.drawable.BitmapDrawable(c.getResources(), sky);
-        d.setFilterBitmap(false);
-        d.setGravity(Gravity.FILL);
+    /** A rounded panel: `fill`, an outline when `stroke` is not 0, corners of `radius` dp. */
+    static Drawable rounded(Context c, int fill, int stroke, float radius) {
+        GradientDrawable d = new GradientDrawable();
+        d.setColor(fill);
+        d.setCornerRadius(dp(c, radius));
+        if (stroke != 0) d.setStroke(Math.max(1, dp(c, 1)), stroke);
         return d;
     }
 
-    /** A pixel-block background: a 16x16 tile of earthy shades, scaled up without smoothing. */
-    static android.graphics.drawable.Drawable blocks(Context c) {
-        int[] shades = {
-            Color.rgb(58, 44, 34), Color.rgb(66, 50, 38), Color.rgb(50, 38, 30),
-            Color.rgb(74, 58, 44), Color.rgb(44, 34, 26), Color.rgb(62, 48, 36)
-        };
-        java.util.Random random = new java.util.Random(7);
-        android.graphics.Bitmap tile = android.graphics.Bitmap.createBitmap(16, 16, android.graphics.Bitmap.Config.ARGB_8888);
-        for (int y = 0; y < 16; y++) {
-            for (int x = 0; x < 16; x++) {
-                tile.setPixel(x, y, shade(shades[random.nextInt(shades.length)], 0.55f));
-            }
-        }
-        int size = dp(c, 64);
-        android.graphics.Bitmap big = android.graphics.Bitmap.createScaledBitmap(tile, size, size, false);
-        android.graphics.drawable.BitmapDrawable d = new android.graphics.drawable.BitmapDrawable(c.getResources(), big);
-        d.setTileModeXY(android.graphics.Shader.TileMode.REPEAT, android.graphics.Shader.TileMode.REPEAT);
-        d.setFilterBitmap(false);
-        return d;
+    /** A pressable background: `fill` with a ripple, lighter under the pointer. */
+    static Drawable pressable(Context c, int fill, int stroke, float radius) {
+        StateListDrawable states = new StateListDrawable();
+        states.addState(new int[] {-android.R.attr.state_enabled}, rounded(c, shade(fill, 0.6f), stroke == 0 ? 0 : shade(stroke, 0.7f), radius));
+        states.addState(new int[] {android.R.attr.state_hovered}, rounded(c, shade(fill, 1.25f), stroke == 0 ? 0 : TEXT, radius));
+        states.addState(new int[] {android.R.attr.state_focused}, rounded(c, shade(fill, 1.2f), stroke == 0 ? 0 : TEXT, radius));
+        states.addState(new int[] {}, rounded(c, fill, stroke, radius));
+        return new RippleDrawable(ColorStateList.valueOf(Color.argb(60, 255, 255, 255)), states, rounded(c, Color.WHITE, 0, radius));
     }
 
     /**
-     * The launcher's own stone texture, in black and white: a 16x16 tile drawn here (no game
-     * file), scaled up without smoothing and repeated. `bricks`: staggered bricks with dark
-     * mortar, a lit top-left edge and a shaded bottom-right one, for the pages; else a smooth
-     * speckled slab with a few cracks, for the menu and the bars. `light`: the fill's grey.
+     * The night landscape behind the launcher, drawn at whatever size it is shown: a deep
+     * blue sky with a green glow at the horizon, stars, and three ranges of stepped, blocky
+     * hills fading into the distance.
      */
-    static android.graphics.drawable.Drawable stone(Context c, boolean bricks, int light) {
-        java.util.Random random = new java.util.Random(bricks ? 41 : 17);
-        android.graphics.Bitmap tile = android.graphics.Bitmap.createBitmap(16, 16, android.graphics.Bitmap.Config.ARGB_8888);
-        for (int y = 0; y < 16; y++) {
-            for (int x = 0; x < 16; x++) {
-                int v = light + random.nextInt(7) - 3;
-                if (bricks) {
-                    // Two rows of bricks, 8 pixels tall, the lower one shifted by half a brick.
-                    int row = y / 8, by = y % 8, bx = (x + (row == 0 ? 0 : 8)) % 16;
-                    if (by == 7 || bx == 15) v = light / 3;
-                    else if (by == 0 || bx == 0) v = light + 9;
-                    else if (by == 6 || bx == 14) v = light - 6;
-                } else if (random.nextInt(22) == 0) {
-                    v = light + 10;
+    static Drawable sunset(Context c) {
+        return new Drawable() {
+            private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+            private final Path path = new Path();
+
+            @Override
+            public void draw(Canvas canvas) {
+                Rect b = getBounds();
+                float w = b.width(), h = b.height();
+                if (w <= 0 || h <= 0) return;
+                canvas.save();
+                canvas.translate(b.left, b.top);
+                paint.setShader(new LinearGradient(0, 0, 0, h,
+                        new int[] {Color.rgb(8, 11, 22), Color.rgb(14, 24, 44), Color.rgb(22, 52, 58)},
+                        new float[] {0f, 0.55f, 1f}, Shader.TileMode.CLAMP));
+                canvas.drawRect(0, 0, w, h, paint);
+                // The glow over the hills.
+                paint.setShader(new RadialGradient(w * 0.68f, h * 0.78f, Math.max(w, h) * 0.55f,
+                        Color.argb(110, 46, 175, 92), Color.argb(0, 46, 175, 92), Shader.TileMode.CLAMP));
+                canvas.drawRect(0, 0, w, h, paint);
+                paint.setShader(null);
+                java.util.Random random = new java.util.Random(26);
+                for (int i = 0; i < 140; i++) {
+                    float x = random.nextFloat() * w, y = random.nextFloat() * h * 0.6f;
+                    float r = (random.nextInt(5) == 0 ? 1.6f : 0.9f) * c.getResources().getDisplayMetrics().density;
+                    paint.setColor(Color.argb(90 + random.nextInt(140), 255, 255, 255));
+                    canvas.drawCircle(x, y, r, paint);
                 }
-                v = Math.max(0, Math.min(255, v));
-                tile.setPixel(x, y, Color.rgb(v, v, v + 2));
+                // A big, soft moon.
+                float moon = h * 0.07f;
+                paint.setColor(Color.argb(40, 220, 240, 255));
+                canvas.drawCircle(w * 0.2f, h * 0.22f, moon * 1.9f, paint);
+                paint.setColor(Color.rgb(226, 236, 242));
+                canvas.drawCircle(w * 0.2f, h * 0.22f, moon, paint);
+                // Stepped hills: far, middle, near.
+                int[] colors = {Color.rgb(20, 40, 52), Color.rgb(14, 28, 36), Color.rgb(9, 16, 22)};
+                float[] base = {0.70f, 0.80f, 0.90f};
+                float step = Math.max(8f, w / 48f);
+                for (int layer = 0; layer < 3; layer++) {
+                    java.util.Random hills = new java.util.Random(11 + layer * 7);
+                    path.reset();
+                    path.moveTo(0, h);
+                    float y = h * base[layer];
+                    for (float x = 0; x < w + step; x += step) {
+                        y = Math.max(h * (base[layer] - 0.1f), Math.min(h * (base[layer] + 0.05f), y + (hills.nextInt(3) - 1) * step * 0.5f));
+                        path.lineTo(x, y);
+                        path.lineTo(x + step, y);
+                    }
+                    path.lineTo(w, h);
+                    path.close();
+                    paint.setColor(colors[layer]);
+                    canvas.drawPath(path, paint);
+                }
+                canvas.restore();
             }
-        }
-        if (!bricks) {
-            // A crack or two across the slab.
-            int[][] crack = {{2, 3}, {3, 4}, {4, 4}, {5, 5}, {6, 5}, {11, 10}, {12, 11}, {12, 12}, {13, 13}};
-            for (int[] at : crack) tile.setPixel(at[0], at[1], Color.rgb(light / 3, light / 3, light / 3));
-        }
-        int size = dp(c, 64);
-        android.graphics.Bitmap big = android.graphics.Bitmap.createScaledBitmap(tile, size, size, false);
-        android.graphics.drawable.BitmapDrawable d = new android.graphics.drawable.BitmapDrawable(c.getResources(), big);
-        d.setTileModeXY(android.graphics.Shader.TileMode.REPEAT, android.graphics.Shader.TileMode.REPEAT);
-        d.setFilterBitmap(false);
-        return d;
+
+            @Override public void setAlpha(int alpha) {}
+            @Override public void setColorFilter(android.graphics.ColorFilter f) {}
+            @Override public int getOpacity() { return android.graphics.PixelFormat.OPAQUE; }
+        };
     }
 
-    /** `texture` under a white outline `px` wide: a textured panel. */
-    static android.graphics.drawable.Drawable framed(Context c, android.graphics.drawable.Drawable texture, float px) {
-        android.graphics.drawable.GradientDrawable edge = new android.graphics.drawable.GradientDrawable();
-        edge.setColor(Color.TRANSPARENT);
-        edge.setStroke(dp(c, px), EDGE);
-        return new android.graphics.drawable.LayerDrawable(new android.graphics.drawable.Drawable[] {texture, edge});
+    /** The launcher's line icons, drawn at any size. */
+    enum Glyph { HOME, SKIN, SETTINGS, CONTROLS, ACCOUNT, UPDATES, MODS, PLAY }
+
+    /** A line icon `size` dp across, in `color`. */
+    static Drawable icon(Context c, final Glyph glyph, final int color, float size) {
+        final int px = dp(c, size);
+        Drawable d = new Drawable() {
+            @Override
+            public void draw(Canvas canvas) {
+                Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
+                p.setColor(color);
+                p.setStyle(Paint.Style.STROKE);
+                p.setStrokeCap(Paint.Cap.ROUND);
+                p.setStrokeJoin(Paint.Join.ROUND);
+                Rect b = getBounds();
+                float u = b.width() / 24f;
+                canvas.save();
+                canvas.translate(b.left, b.top);
+                p.setStrokeWidth(2f * u);
+                Path path = new Path();
+                switch (glyph) {
+                    case HOME:
+                        path.moveTo(3 * u, 11 * u);
+                        path.lineTo(12 * u, 3.5f * u);
+                        path.lineTo(21 * u, 11 * u);
+                        path.moveTo(5.5f * u, 9.5f * u);
+                        path.lineTo(5.5f * u, 20 * u);
+                        path.lineTo(18.5f * u, 20 * u);
+                        path.lineTo(18.5f * u, 9.5f * u);
+                        path.moveTo(10 * u, 20 * u);
+                        path.lineTo(10 * u, 14 * u);
+                        path.lineTo(14 * u, 14 * u);
+                        path.lineTo(14 * u, 20 * u);
+                        break;
+                    case SKIN:
+                        // A coat hanger.
+                        path.moveTo(12 * u, 10 * u);
+                        path.lineTo(12 * u, 8.5f * u);
+                        path.arcTo(new RectF(9.5f * u, 3 * u, 14.5f * u, 8 * u), 90, -270);
+                        path.moveTo(12 * u, 10 * u);
+                        path.lineTo(2.5f * u, 18 * u);
+                        path.lineTo(21.5f * u, 18 * u);
+                        path.close();
+                        break;
+                    case SETTINGS:
+                        // Three sliders.
+                        for (int i = 0; i < 3; i++) {
+                            float y = (6 + 6 * i) * u, knob = (i == 1 ? 8 : i == 0 ? 15 : 12) * u;
+                            path.moveTo(3 * u, y);
+                            path.lineTo(knob - 2.5f * u, y);
+                            path.moveTo(knob + 2.5f * u, y);
+                            path.lineTo(21 * u, y);
+                            path.addCircle(knob, y, 2.5f * u, Path.Direction.CW);
+                        }
+                        break;
+                    case CONTROLS:
+                        // A Touch controller: the ring and the grip.
+                        path.addCircle(12 * u, 8.5f * u, 5.5f * u, Path.Direction.CW);
+                        path.addCircle(12 * u, 8.5f * u, 1.6f * u, Path.Direction.CW);
+                        path.moveTo(9.5f * u, 13.5f * u);
+                        path.lineTo(10 * u, 21 * u);
+                        path.lineTo(14 * u, 21 * u);
+                        path.lineTo(14.5f * u, 13.5f * u);
+                        break;
+                    case ACCOUNT:
+                        path.addCircle(12 * u, 8 * u, 4 * u, Path.Direction.CW);
+                        path.moveTo(4 * u, 21 * u);
+                        path.cubicTo(4 * u, 15 * u, 20 * u, 15 * u, 20 * u, 21 * u);
+                        break;
+                    case UPDATES:
+                        path.addArc(new RectF(4 * u, 4 * u, 20 * u, 20 * u), -60, 300);
+                        path.moveTo(20.5f * u, 3.5f * u);
+                        path.lineTo(20 * u, 8.5f * u);
+                        path.lineTo(15 * u, 8 * u);
+                        break;
+                    case MODS:
+                        // A cube.
+                        path.moveTo(12 * u, 2.5f * u);
+                        path.lineTo(20.5f * u, 7 * u);
+                        path.lineTo(20.5f * u, 17 * u);
+                        path.lineTo(12 * u, 21.5f * u);
+                        path.lineTo(3.5f * u, 17 * u);
+                        path.lineTo(3.5f * u, 7 * u);
+                        path.close();
+                        path.moveTo(3.5f * u, 7 * u);
+                        path.lineTo(12 * u, 11.5f * u);
+                        path.lineTo(20.5f * u, 7 * u);
+                        path.moveTo(12 * u, 11.5f * u);
+                        path.lineTo(12 * u, 21.5f * u);
+                        break;
+                    case PLAY:
+                        p.setStyle(Paint.Style.FILL);
+                        path.moveTo(7 * u, 4 * u);
+                        path.lineTo(20 * u, 12 * u);
+                        path.lineTo(7 * u, 20 * u);
+                        path.close();
+                        break;
+                }
+                canvas.drawPath(path, p);
+                canvas.restore();
+            }
+
+            @Override public int getIntrinsicWidth() { return px; }
+            @Override public int getIntrinsicHeight() { return px; }
+            @Override public void setAlpha(int alpha) {}
+            @Override public void setColorFilter(android.graphics.ColorFilter f) {}
+            @Override public int getOpacity() { return android.graphics.PixelFormat.TRANSLUCENT; }
+        };
+        d.setBounds(0, 0, px, px);
+        return d;
     }
 
     /** A full-screen background with a centered card; returns the card to fill. */
@@ -207,11 +278,12 @@ final class Ui {
         FrameLayout center = new FrameLayout(a);
         LinearLayout card = new LinearLayout(a);
         card.setOrientation(LinearLayout.VERTICAL);
-        int p = dp(a, 22);
+        int p = dp(a, 26);
         card.setPadding(p, p, p, p);
-        card.setBackground(rounded(a, CARD, EDGE, 0));
+        card.setBackground(rounded(a, CARD, EDGE, 20));
+        card.setElevation(dp(a, 8));
         FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(
-                Math.min(dp(a, 520), a.getResources().getDisplayMetrics().widthPixels - dp(a, 32)),
+                Math.min(dp(a, 560), a.getResources().getDisplayMetrics().widthPixels - dp(a, 32)),
                 FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.CENTER);
         lp.setMargins(0, dp(a, 16), 0, dp(a, 16));
         center.addView(card, lp);
@@ -226,11 +298,9 @@ final class Ui {
         t.setText(s);
         t.setTextSize(size);
         t.setTextColor(color);
-        t.setTypeface(bold ? Typeface.create("sans-serif-medium", Typeface.BOLD) : Typeface.create("sans-serif", Typeface.NORMAL));
-        t.setLineSpacing(0, 1.15f);
-        // The menus' hard drop shadow.
-        t.setShadowLayer(0.01f, dp(c, 1.5f), dp(c, 1.5f), SHADOW);
-        t.setPadding(0, dp(c, 4), 0, dp(c, 4));
+        t.setTypeface(bold ? Typeface.create("sans-serif-medium", Typeface.NORMAL) : Typeface.create("sans-serif", Typeface.NORMAL));
+        t.setLineSpacing(0, 1.2f);
+        t.setPadding(0, dp(c, 3), 0, dp(c, 3));
         return t;
     }
 
@@ -239,25 +309,11 @@ final class Ui {
         b.setText(s);
         b.setAllCaps(false);
         b.setTextSize(primary ? 17 : 15);
+        b.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
         b.setTextColor(primary ? Color.WHITE : TEXT);
-        b.setTypeface(Typeface.create("sans-serif-medium", Typeface.BOLD));
-        int fill = primary ? GREEN : STONE;
-        android.graphics.drawable.StateListDrawable states = new android.graphics.drawable.StateListDrawable();
-        states.addState(new int[] {-android.R.attr.state_enabled}, new Bevel(dp(c, 2), shade(fill, 0.55f), EDGE, false));
-        states.addState(new int[] {android.R.attr.state_pressed}, new Bevel(dp(c, 2), shade(fill, 0.8f), EDGE, true));
-        states.addState(new int[] {android.R.attr.state_focused}, new Bevel(dp(c, 2), shade(fill, 1.15f), Color.WHITE, false));
-        states.addState(new int[] {android.R.attr.state_hovered}, new Bevel(dp(c, 2), shade(fill, 1.15f), Color.WHITE, false));
-        states.addState(new int[] {}, new Bevel(dp(c, 2), fill, EDGE, false));
-        b.setBackground(states);
-        if (primary) {
-            // Black on the white button.
-            b.setTextColor(Color.BLACK);
-            b.setShadowLayer(0, 0, 0, 0);
-        } else {
-            b.setTextColor(Color.WHITE);
-            b.setShadowLayer(0.01f, dp(c, 1.5f), dp(c, 1.5f), SHADOW);
-        }
-        b.setMinHeight(dp(c, primary ? 54 : 44));
+        b.setBackground(primary ? pressable(c, GREEN, 0, 12) : pressable(c, STONE, EDGE, 12));
+        b.setMinHeight(dp(c, primary ? 52 : 44));
+        b.setPadding(dp(c, 16), dp(c, 8), dp(c, 16), dp(c, 8));
         b.setStateListAnimator(null);
         return b;
     }
@@ -269,19 +325,21 @@ final class Ui {
         return lp;
     }
 
-    /** A section header: a thin divider and a small green caption (empty title: divider only). */
+    /** A section header: a small accent caption over a thin line (empty title: the line only). */
     static void section(LinearLayout card, String title) {
         Context c = card.getContext();
+        if (!title.isEmpty()) {
+            TextView t = text(c, title.toUpperCase(Locale.getDefault()), 12, GREEN, true);
+            t.setLetterSpacing(0.1f);
+            LinearLayout.LayoutParams tp = gap(c, card.getChildCount() == 0 ? 0 : 20);
+            card.addView(t, tp);
+        }
         View line = new View(c);
         line.setBackgroundColor(EDGE);
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, Math.max(1, dp(c, 1)));
-        lp.topMargin = dp(c, 18);
-        lp.bottomMargin = dp(c, 8);
+        lp.topMargin = dp(c, title.isEmpty() ? 18 : 4);
+        lp.bottomMargin = dp(c, 10);
         card.addView(line, lp);
-        if (title.isEmpty()) return;
-        TextView t = text(c, title.toUpperCase(Locale.getDefault()), 12, GREEN, true);
-        t.setLetterSpacing(0.08f);
-        card.addView(t);
     }
 
     /** A rounded progress bar, 0..1000. */
@@ -292,7 +350,7 @@ final class Ui {
 
         Bar(Context c) {
             super(c);
-            setMinimumHeight(dp(c, 14));
+            setMinimumHeight(dp(c, 10));
         }
 
         void set(int permille) {
@@ -302,22 +360,19 @@ final class Ui {
 
         @Override
         protected void onMeasure(int w, int h) {
-            setMeasuredDimension(MeasureSpec.getSize(w), dp(getContext(), 14));
+            setMeasuredDimension(MeasureSpec.getSize(w), dp(getContext(), 10));
         }
 
         @Override
         protected void onDraw(Canvas canvas) {
-            int px = dp(getContext(), 2);
-            paint.setColor(EDGE);
-            canvas.drawRect(0, 0, getWidth(), getHeight(), paint);
-            paint.setColor(Color.rgb(28, 28, 30));
-            canvas.drawRect(px, px, getWidth() - px, getHeight() - px, paint);
+            float radius = getHeight() / 2f;
+            paint.setColor(STONE);
+            r.set(0, 0, getWidth(), getHeight());
+            canvas.drawRoundRect(r, radius, radius, paint);
             if (value > 0) {
-                float right = px + (getWidth() - 2 * px) * value / 1000f;
+                r.set(0, 0, Math.max(getHeight(), getWidth() * value / 1000f), getHeight());
                 paint.setColor(GREEN);
-                canvas.drawRect(px, px, right, getHeight() - px, paint);
-                paint.setColor(shade(GREEN, 1.35f));
-                canvas.drawRect(px, px, right, px * 2, paint);
+                canvas.drawRoundRect(r, radius, radius, paint);
             }
         }
     }

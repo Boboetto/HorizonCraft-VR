@@ -87,6 +87,15 @@ fn android_main(app: AndroidApp) {
             }
         }
     }
+    // The launcher's controls page (ProfileActivity): `job=button`, `sticks=swap` and `snap=`
+    // lines in horizon-controls.txt, read by horizon-xr.
+    if let Ok(text) = std::fs::read_to_string(home.join("horizon-controls.txt"))
+        && std::env::var_os("HORIZON_XR_CONTROLS").is_none()
+    {
+        let joined = text.lines().map(str::trim).filter(|l| l.contains('=')).collect::<Vec<_>>().join(",");
+        // SAFETY: still before the game starts its threads.
+        unsafe { std::env::set_var("HORIZON_XR_CONTROLS", joined) };
+    }
     // Before logging starts its thread: these become environment variables.
     let remote_env = android_logs::apply_remote_env();
     logging::init(&home, "Render thread");

@@ -1199,6 +1199,11 @@ impl super::Game<'_> {
                     && (p.swimming || EATING.load(std::sync::atomic::Ordering::Relaxed)))
         });
         horizon_xr::set_look_head(head_look);
+        // Snap turning (the launcher's controls): the body turns at once by the step.
+        let snap = horizon_xr::take_snap_turn();
+        if snap != 0.0 && playing {
+            self.yaw += snap;
+        }
         let Some((yaw, pitch)) = horizon_xr::look(self.yaw) else {
             return;
         };

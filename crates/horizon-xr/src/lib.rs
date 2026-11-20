@@ -425,6 +425,99 @@ pub fn eye_size() -> Option<[u32; 2]> {
     xr_state().as_ref()?.session.as_ref().map(|s| s.size)
 }
 
+/// The player's controls from the launcher (`HORIZON_XR_CONTROLS`, made by android_main from
+/// horizon-controls.txt): which physical button does each button's job, the sticks swapped
+/// (walk with the right one, turn with the left), and snap turning.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Controls {
+    /// For each job (`BUTTON_NAMES` order: A, B, X, Y, left stick click, right stick click,
+    /// left grip, right grip), the physical button that does it.
+    pub buttons: [usize; 8],
+    pub swap_sticks: bool,
+    /// Degrees a snap turn turns; 0 turns smoothly.
+    pub snap: f32,
+}
+
+/// The names `HORIZON_XR_CONTROLS` uses for the buttons, in `Controls::buttons` order.
+pub const BUTTON_NAMES: [&str; 8] = ["a", "b", "x", "y", "lstick", "rstick", "lgrip", "rgrip"];
+
+impl Default for Controls {
+    fn default() -> Self {
+        Self { buttons: [0, 1, 2, 3, 4, 5, 6, 7], swap_sticks: false, snap: 0.0 }
+    }
+}
+
+impl Controls {
+    /// `a=b,b=a,sticks=swap,snap=45`: jobs given to other buttons, unknown entries ignored.
+    pub fn parse(text: &str) -> Self {
+        let mut c = Self::default();
+        let index = |name: &str| BUTTON_NAMES.iter().position(|n| *n == name.trim());
+        for entry in text.split([',', ';', '\n']) {
+            let Some((key, value)) = entry.split_once('=') else {
+                continue;
+            };
+            match key.trim() {
+                "sticks" => c.swap_sticks = value.trim() == "swap",
+                "snap" => c.snap = value.trim().parse::<f32>().unwrap_or(0.0).clamp(0.0, 90.0),
+                job => {
+                    if let (Some(job), Some(button)) = (index(job), index(value)) {
+                        c.buttons[job] = button;
+                    }
+                }
+            }
+        }
+        c
+    }
+
+    /// The pad as the game sees it: each job read from the button the player gave it.
+    pub fn apply(&self, pad: Pad) -> Pad {
+        let physical = [
+            pad.a,
+            pad.b,
+            pad.x,
+            pad.y,
+            pad.left_click,
+            pad.right_click,
+            pad.left_grip,
+            pad.right_grip,
+        ];
+        let job = |i: usize| physical[self.buttons[i]];
+        let (left, right) = if self.swap_sticks { (pad.right, pad.left) } else { (pad.left, pad.right) };
+        Pad {
+            a: job(0),
+            b: job(1),
+            x: job(2),
+            y: job(3),
+            left_click: job(4),
+            right_click: job(5),
+            left_grip: job(6),
+            right_grip: job(7),
+            left,
+            right,
+            ..pad
+        }
+    }
+}
+
+fn controls() -> &'static Controls {
+    static CONTROLS: OnceLock<Controls> = OnceLock::new();
+    CONTROLS.get_or_init(|| {
+        let c = Controls::parse(&std::env::var("HORIZON_XR_CONTROLS").unwrap_or_default());
+        if c != Controls::default() {
+            log::info!("VR: controls {c:?}");
+        }
+        c
+    })
+}
+
+static SNAP_HELD: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static SNAP_PENDING: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// The snap turns (degrees, right positive) since the last call.
+pub fn take_snap_turn() -> f32 {
+    f32::from_bits(SNAP_PENDING.swap(0, std::sync::atomic::Ordering::Relaxed))
+}
+
 /// The Touch controllers as a gamepad, while the session has input focus.
 pub fn pad() -> Option<Pad> {
     let guard = xr_state();
@@ -1022,6 +1115,22 @@ pub fn begin_frame() -> Option<FrameViews> {
         }
         pad.left_click = s.clicks[0].2;
         pad.right_click = s.clicks[1].2;
+        let mut pad = controls().apply(pad);
+        // Snap turning: the right stick pushed past 70% turns once by the step, and turns
+        // again only after it came back; the smooth turn (the stick's x) is left out.
+        let snap = controls().snap;
+        if snap > 0.0 && !s.menu_open {
+            use std::sync::atomic::Ordering;
+            let x = pad.right[0];
+            if x.abs() > 0.7 && !SNAP_HELD.swap(true, Ordering::Relaxed) {
+                let step = if x > 0.0 { snap } else { -snap };
+                let pending = f32::from_bits(SNAP_PENDING.load(Ordering::Relaxed)) + step;
+                SNAP_PENDING.store(pending.to_bits(), Ordering::Relaxed);
+            } else if x.abs() < 0.3 {
+                SNAP_HELD.store(false, Ordering::Relaxed);
+            }
+            pad.right[0] = 0.0;
+        }
         s.pad = pad;
         s.stats.pad = Some(read.map_err(|e| e.to_string()));
     }
@@ -2146,6 +2255,18 @@ pub fn space_warp_release(eye: usize, filled: bool, range: (f32, f32), skip: boo
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn controls_give_jobs_to_other_buttons() {
+        let c = super::Controls::parse("a=b, b=a, sticks=swap, snap=45, rgrip=nothing");
+        let pad = super::Pad { b: true, left: [1.0, 0.0], right: [0.0, -1.0], ..Default::default() };
+        let seen = c.apply(pad);
+        assert!(seen.a && !seen.b);
+        assert_eq!((seen.left, seen.right), ([0.0, -1.0], [1.0, 0.0]));
+        assert_eq!(c.snap, 45.0);
+        assert_eq!(c.buttons[7], 7);
+        assert_eq!(super::Controls::parse(""), super::Controls::default());
+    }
+
     use super::*;
 
     #[test]
