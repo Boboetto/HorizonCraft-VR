@@ -1179,7 +1179,11 @@ pub fn begin_frame() -> Option<FrameViews> {
     // The left stick walks where the head faces, not where the right hand aims (the
     // player's yaw follows the aim, for picking blocks).
     let look_hand = if s.look_left { Hand::LeftAim } else { Hand::RightAim };
+    // While the player looks with the head (swimming, gliding: `set_look_head`) its yaw is
+    // already the head's: turning the stick by the hand's difference sent the swim off to
+    // the hand's side.
     s.move_turn = match s.hands[look_hand as usize] {
+        _ if s.look_head => 0.0,
         Some((aim, _)) => wrap_degrees(
             yaw_pitch(body * head_rotation).0 - yaw_pitch(body * aim).0,
         ),

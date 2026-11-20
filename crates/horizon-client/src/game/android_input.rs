@@ -159,7 +159,10 @@ fn with_touch_controllers(mut pad: PadState, touch: horizon_xr::Pad) -> PadState
     };
     // Over the wrist's hotbar, the right trigger picks a slot (`xr_look`), not the pad; with
     // a bow it draws the string (`xr_bow`).
-    let touch = if horizon_xr::wrist_slot().is_some()
+    let touch = if BOW_STRING_LEFT.load(std::sync::atomic::Ordering::Relaxed) {
+        // A bow: the left trigger draws it (`xr_bow`); neither uses nor attacks.
+        horizon_xr::Pad { triggers: [0.0; 2], ..touch }
+    } else if horizon_xr::wrist_slot().is_some()
         || BOW_HELD.load(std::sync::atomic::Ordering::Relaxed)
     {
         horizon_xr::Pad { triggers: [touch.triggers[0], 0.0], ..touch }
@@ -231,6 +234,24 @@ pub(super) fn xr_gesture_active() -> bool {
 
 /// VR: a bow is held, so the right trigger draws its string (`xr_bow`), never attacks.
 static BOW_HELD: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// VR: a bow (not a crossbow) is held: the left hand draws its string with the left
+/// trigger (`xr_bow`), so neither trigger reaches the pad.
+static BOW_STRING_LEFT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// VR: the boat's turn the view has still to follow (degrees) and the last frame's time
+/// (`defer_boat_turn`).
+static BOAT_TURN: Mutex<(f32, Option<std::time::Instant>)> = Mutex::new((0.0, None));
+
+/// VR: `degrees` of a boat's turn this tick, followed by the view over the next tick's
+/// frames (`xr_look`). False off VR.
+pub(super) fn defer_boat_turn(degrees: f32) -> bool {
+    if !horizon_xr::active() {
+        return false;
+    }
+    BOAT_TURN.lock().unwrap_or_else(std::sync::PoisonError::into_inner).0 += degrees;
+    true
+}
 
 /// VR: an arrow is nocked or the bow drawn (`xr_bow`): the hands do not row.
 static BOW_DRAWING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -966,11 +987,11 @@ impl super::Game<'_> {
         }
         state.2 = motion.map(|v| v * 0.9);
     }
-    /// VR: the bow with both hands, as Vivecraft's: held in either hand it shows in the left
-    /// one; the right hand brought to it (within 20 cm) nocks an arrow for half a second,
-    /// the right trigger squeezed then draws (use held) and letting go shoots. The arrow
-    /// flies from the right hand through the left, so the player looks that way while
-    /// drawing and a moment after. Returns where to look.
+    /// VR: the bow with both hands: held in either hand it shows in the right one; the left
+    /// hand brought to it (within 20 cm) nocks an arrow for half a second, the left trigger
+    /// squeezed then draws (use held) and letting go shoots. The arrow flies from the left
+    /// hand through the right (along the arrow drawn between them), so the player looks that
+    /// way while drawing and a moment after. Returns where to look.
     fn xr_bow(&mut self) -> Option<[f64; 3]> {
         use std::time::{Duration, Instant};
         // Drawing, the last aim, until when the player keeps looking along it, and until when
@@ -990,7 +1011,10 @@ impl super::Game<'_> {
         let loaded = crossbow && items[0].as_ref().and_then(|s| s.data()).is_some_and(|d| !d.charged.is_empty());
         let held = bow_held || crossbow;
         BOW_HELD.store(held, std::sync::atomic::Ordering::Relaxed);
-        let trigger = horizon_xr::pad().is_some_and(|p| p.triggers[1] > 0.5);
+        BOW_STRING_LEFT.store(bow_held && !crossbow, std::sync::atomic::Ordering::Relaxed);
+        // The crossbow's trigger is the right one, the bow's string hand's the left.
+        let string_trigger = if crossbow { 1 } else { 0 };
+        let trigger = horizon_xr::pad().is_some_and(|p| p.triggers[string_trigger] > 0.5);
         let pressed = trigger && !TRIGGER.swap(trigger, std::sync::atomic::Ordering::Relaxed);
         if !trigger {
             TRIGGER.store(false, std::sync::atomic::Ordering::Relaxed);
@@ -1011,7 +1035,9 @@ impl super::Game<'_> {
                 return None;
             }
         };
-        let string = left - right;
+        // The crossbow is aimed from the right hand at the left as before; the bow's arrow
+        // goes from the left (string) hand through the right (bow) hand.
+        let string = if crossbow { left - right } else { right - left };
         if string.length() > 0.02 {
             let d = string.normalize();
             bow.1 = [f64::from(d.x), f64::from(d.y), f64::from(d.z)];
@@ -1048,6 +1074,20 @@ impl super::Game<'_> {
         aiming.then(|| [0, 1, 2].map(|i| eye[i] + bow.1[i] * 10.0))
     }
     pub(super) fn xr_look(&mut self) {
+        // A boat's turn (`defer_boat_turn`), a tick's worth over a tick's time.
+        {
+            let mut turn = BOAT_TURN.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let now = std::time::Instant::now();
+            let dt = turn.1.map_or(0.0, |t| now.duration_since(t).as_secs_f32());
+            turn.1 = Some(now);
+            if self.riding.is_none() {
+                turn.0 = 0.0;
+            } else if turn.0 != 0.0 {
+                let step = if turn.0.abs() < 0.01 { turn.0 } else { turn.0 * (dt / 0.05).min(1.0) };
+                turn.0 -= step;
+                self.yaw += step;
+            }
+        }
         horizon_xr::set_menu(self.title.is_some() || self.screen != super::Screen::Playing);
         *XR_HEAD.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = self
             .player
@@ -1150,11 +1190,13 @@ impl super::Game<'_> {
         let aim = aim.filter(|_| playing);
         let other = other.filter(|_| playing);
         horizon_xr::set_aim_points(if look_left { [aim, other] } else { [other, aim] });
-        // Swimming goes where the head looks (the left stick's click sprints into a swim), and
-        // food held at the mouth in water must not point the swim down.
+        // Swimming and gliding go where the head looks, every way (up, down, sideways: the
+        // left stick's click sprints into a swim, A in the air opens the elytra), and food
+        // held at the mouth in water must not point the swim down.
         let head_look = self.player.as_ref().is_some_and(|p| {
-            p.fluids.was_touching_water
-                && (p.swimming || EATING.load(std::sync::atomic::Ordering::Relaxed))
+            p.fall_flying
+                || (p.fluids.was_touching_water
+                    && (p.swimming || EATING.load(std::sync::atomic::Ordering::Relaxed)))
         });
         horizon_xr::set_look_head(head_look);
         let Some((yaw, pitch)) = horizon_xr::look(self.yaw) else {
