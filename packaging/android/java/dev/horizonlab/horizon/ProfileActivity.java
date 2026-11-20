@@ -256,6 +256,8 @@ public class ProfileActivity extends Activity implements View.OnClickListener {
         final Button scaleButton = Ui.button(this, "", false);
         final Button boostButton = Ui.button(this, "", false);
         final Button warpButton = Ui.button(this, "", false);
+        final Button colorButton = Ui.button(this, "", false);
+        vividOn = vrSetting("contrast", 1.08f) > 1.001f;
         final boolean[] pace = {vrSetting("pace", 1) != 0};
         msaaOn = vrSetting("msaa", 1) != 0;
         boostOn = vrSetting("boost", 1) != 0;
@@ -278,6 +280,7 @@ public class ProfileActivity extends Activity implements View.OnClickListener {
                 scaleButton.setText(String.format(java.util.Locale.ROOT, Ui.t("Разрешение: %.2fx", "Resolution: %.2fx"), vrScale));
                 boostButton.setText(Ui.t("Ускорение: ", "Performance boost: ") + (boostOn ? "On" : "Off"));
                 warpButton.setText("SpaceWarp: " + (warpOn ? "On" : "Off"));
+                colorButton.setText(Ui.t("Цвета: ", "Colours: ") + (vividOn ? Ui.t("яркие", "vivid") : Ui.t("обычные", "natural")));
                 summary.setText(String.format(java.util.Locale.ROOT,
                         "Quality · %.2fx · 72 Hz · 6 chunks · anisotropic 8x%s", vrScale, msaaOn ? " · MSAA 4x" : ""));
             }
@@ -288,6 +291,7 @@ public class ProfileActivity extends Activity implements View.OnClickListener {
                 msaaOn = true;
                 boostOn = true;
                 warpOn = true;
+                vividOn = true;
                 pace[0] = true;
                 vrScale = qualityScale();
                 applyMode("quality", true);
@@ -341,6 +345,18 @@ public class ProfileActivity extends Activity implements View.OnClickListener {
                 showVr.run();
             }
         });
+        colorButton.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                vividOn = !vividOn;
+                saveVr(vrScale, 72, pace[0]);
+                showVr.run();
+            }
+        });
+        card.addView(colorButton, Ui.gap(this, 6));
+        card.addView(Ui.text(this, Ui.t(
+                "Яркие цвета: чуть больше контраста и цвета в шлеме, картинка чётче.",
+                "Vivid colours: a little more contrast and colour in the headset, for a crisper picture. Natural shows the game's own colours."),
+                12, Ui.MUTED, false));
         card.addView(scaleButton, Ui.gap(this, 6));
         card.addView(Ui.text(this, Ui.t(
                 "Разрешение: выше — резче, но меньше кадров.",
@@ -844,7 +860,7 @@ public class ProfileActivity extends Activity implements View.OnClickListener {
             scale = 1.0f; hz = 72; distance = 9; simulation = 8; clouds = "\"fast\""; particles = "0"; biome = 2; entities = "1.0";
         }
         try (java.io.FileWriter w = new java.io.FileWriter(vrFile())) {
-            w.write(String.format(java.util.Locale.ROOT, "mode=%s\nscale=%.2f\nhz=%d\npace=%d\nmsaa=%d\nboost=%d\nspacewarp=%d\npreset=4\n", mode, scale, hz, pace ? 1 : 0, msaaOn ? 1 : 0, boostOn ? 1 : 0, warpOn ? 1 : 0));
+            w.write(String.format(java.util.Locale.ROOT, "mode=%s\nscale=%.2f\nhz=%d\npace=%d\nmsaa=%d\nboost=%d\nspacewarp=%d\npreset=4\n%s", mode, scale, hz, pace ? 1 : 0, msaaOn ? 1 : 0, boostOn ? 1 : 0, warpOn ? 1 : 0, colorLines()));
         } catch (Exception ignored) {
         }
         java.util.LinkedHashMap<String, String> set = new java.util.LinkedHashMap<>();
@@ -880,6 +896,14 @@ public class ProfileActivity extends Activity implements View.OnClickListener {
         }
     }
 
+    /** Vivid colours: a touch more contrast and colour in the headset (horizon-vr.txt
+     * `contrast=` and `saturation=`, read by horizon-xr's blit), on by default. */
+    private boolean vividOn = true;
+
+    private String colorLines() {
+        return vividOn ? "contrast=1.08\nsaturation=1.06\n" : "contrast=1.00\nsaturation=1.00\n";
+    }
+
     /** VR's Application SpaceWarp (horizon-vr.txt `spacewarp=`), on by default. */
     private boolean warpOn = true;
 
@@ -898,7 +922,7 @@ public class ProfileActivity extends Activity implements View.OnClickListener {
 
     private void saveVr(float scale, int hz, boolean pace) {
         try (java.io.FileWriter w = new java.io.FileWriter(vrFile())) {
-            w.write(String.format(java.util.Locale.ROOT, "mode=quality\nscale=%.2f\nhz=%d\npace=%d\nmsaa=%d\nboost=%d\nspacewarp=%d\npreset=4\n", scale, hz, pace ? 1 : 0, msaaOn ? 1 : 0, boostOn ? 1 : 0, warpOn ? 1 : 0));
+            w.write(String.format(java.util.Locale.ROOT, "mode=quality\nscale=%.2f\nhz=%d\npace=%d\nmsaa=%d\nboost=%d\nspacewarp=%d\npreset=4\n%s", scale, hz, pace ? 1 : 0, msaaOn ? 1 : 0, boostOn ? 1 : 0, warpOn ? 1 : 0, colorLines()));
         } catch (Exception ignored) {
         }
     }

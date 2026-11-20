@@ -274,14 +274,26 @@ fn decode(c: vec3<f32>) -> vec3<f32> {
     return select(pow((c + 0.055) / 1.055, vec3<f32>(2.4)), c / 12.92, c <= vec3<f32>(0.04045));
 }
 
+// The world's grade for the headset's panels (`Grade`): a little more contrast about mid grey
+// and a little more colour, on the sRGB-encoded values (as a picture editor's sliders work), so
+// the image reads crisper through the lenses. 1 leaves it as drawn.
+override contrast: f32 = 1.0;
+override saturation: f32 = 1.0;
+
+fn grade(c: vec3<f32>) -> vec3<f32> {
+    let luma = dot(c, vec3<f32>(0.2126, 0.7152, 0.0722));
+    let coloured = mix(vec3<f32>(luma), c, saturation);
+    return clamp((coloured - 0.5) * contrast + 0.5, vec3<f32>(0.0), vec3<f32>(1.0));
+}
+
 @fragment
 fn fs_srgb(in: Out) -> @location(0) vec4<f32> {
-    return vec4<f32>(decode(textureSample(frame, frame_sampler, in.uv).rgb), 1.0);
+    return vec4<f32>(decode(grade(textureSample(frame, frame_sampler, in.uv).rgb)), 1.0);
 }
 
 @fragment
 fn fs_unorm(in: Out) -> @location(0) vec4<f32> {
-    return vec4<f32>(textureSample(frame, frame_sampler, in.uv).rgb, 1.0);
+    return vec4<f32>(grade(textureSample(frame, frame_sampler, in.uv).rgb), 1.0);
 }
 
 // The HUD's panel keeps its coverage, for the compositor to blend.
@@ -306,9 +318,24 @@ fn fs_unorm_alpha(in: Out) -> @location(0) vec4<f32> {
 }
 ";
 
+/// The world's grade (`grade` in the shader): contrast and saturation, from
+/// `HORIZON_XR_CONTRAST` and `HORIZON_XR_SATURATION` (the launcher's horizon-vr.txt or the
+/// development switches), by default a touch above the frame's own.
+fn grade_constants() -> [(&'static str, f64); 2] {
+    let read = |name: &str, fallback: f64| {
+        std::env::var(name)
+            .ok()
+            .and_then(|v| v.trim().parse::<f64>().ok())
+            .filter(|v| (0.5..=2.0).contains(v))
+            .unwrap_or(fallback)
+    };
+    [("contrast", read("HORIZON_XR_CONTRAST", 1.08)), ("saturation", read("HORIZON_XR_SATURATION", 1.06))]
+}
+
 impl Blit {
     /// `alpha`: keep the frame's alpha (the HUD), else opaque.
     pub fn new(device: &wgpu::Device, format: wgpu::TextureFormat, alpha: bool) -> Self {
+        let constants = grade_constants();
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Horizon VR blit"),
             source: wgpu::ShaderSource::Wgsl(SHADER.into()),
@@ -356,7 +383,10 @@ impl Blit {
                     (true, true) => "fs_srgb_alpha",
                     (false, true) => "fs_unorm_alpha",
                 }),
-                compilation_options: Default::default(),
+                compilation_options: wgpu::PipelineCompilationOptions {
+                    constants: &constants,
+                    ..Default::default()
+                },
                 targets: &[Some(format.into())],
             }),
             primitive: wgpu::PrimitiveState::default(),

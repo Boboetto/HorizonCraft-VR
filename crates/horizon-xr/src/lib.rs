@@ -1646,14 +1646,16 @@ fn finish_frame(s: &mut Session, sharpen: bool, queue: &wgpu::Queue) {
         let layer = xr::CompositionLayerProjection::new()
             .space(&s.local)
             .views(&projection_views);
-        // The compositor's filter on the eyes' layer, chained to it: super sampling by default,
-        // which calms the far blocks' shimmer. Its sharpening ringed fine far detail with halos
-        // (from about five blocks away). `HORIZON_XR_FILTER`: `sharpen`, `normal` or `none`.
+        // The compositor's filter on the eyes' layer, chained to it: its normal super sampling by
+        // default, which calms the far blocks' shimmer. The quality one softened the whole
+        // picture (players found it duller than the game on a monitor); its sharpening ringed
+        // fine far detail with halos (from about five blocks away).
+        // `HORIZON_XR_FILTER`: `quality`, `sharpen`, `normal` or `none`.
         let filter = match std::env::var("HORIZON_XR_FILTER").as_deref() {
             Ok("sharpen") => Some(xr::sys::CompositionLayerSettingsFlagsFB::QUALITY_SHARPENING),
-            Ok("normal") => Some(xr::sys::CompositionLayerSettingsFlagsFB::NORMAL_SUPER_SAMPLING),
+            Ok("quality") => Some(xr::sys::CompositionLayerSettingsFlagsFB::QUALITY_SUPER_SAMPLING),
             Ok("none") => None,
-            _ => Some(xr::sys::CompositionLayerSettingsFlagsFB::QUALITY_SUPER_SAMPLING),
+            _ => Some(xr::sys::CompositionLayerSettingsFlagsFB::NORMAL_SUPER_SAMPLING),
         };
         let settings = xr::sys::CompositionLayerSettingsFB {
             ty: xr::sys::CompositionLayerSettingsFB::TYPE,

@@ -69,11 +69,26 @@ fn android_main(app: AndroidApp) {
             // SAFETY: still before the game starts its threads.
             unsafe { std::env::set_var("HORIZON_XR_SPACEWARP", "0") };
         }
+        // With SpaceWarp the mobs are posed on the CPU: the made-up frames move what the game
+        // tags with its last vertices, and GPU-posed models had none to give, so far mobs
+        // smeared and doubled. `HORIZON_ENTITY_SKIN=1` keeps them on the GPU.
+        if !text.lines().any(|l| l.trim() == "spacewarp=0")
+            && std::env::var_os("HORIZON_NO_ENTITY_SKIN").is_none()
+            && std::env::var("HORIZON_ENTITY_SKIN").as_deref() != Ok("1")
+        {
+            // SAFETY: still before the game starts its threads.
+            unsafe { std::env::set_var("HORIZON_NO_ENTITY_SKIN", "1") };
+        }
         if text.lines().any(|l| l.trim() == "msaa=0") && std::env::var_os("HORIZON_XR_MSAA").is_none() {
             // SAFETY: still before the game starts its threads.
             unsafe { std::env::set_var("HORIZON_XR_MSAA", "off") };
         }
-        for (key, var) in [("scale", "HORIZON_XR_SCALE"), ("hz", "HORIZON_XR_HZ")] {
+        for (key, var) in [
+            ("scale", "HORIZON_XR_SCALE"),
+            ("hz", "HORIZON_XR_HZ"),
+            ("contrast", "HORIZON_XR_CONTRAST"),
+            ("saturation", "HORIZON_XR_SATURATION"),
+        ] {
             let value = text
                 .lines()
                 .filter_map(|l| l.split_once('='))

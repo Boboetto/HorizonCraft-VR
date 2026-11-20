@@ -1080,6 +1080,11 @@ pub struct Renderer {
     /// VR: the eye being drawn (and the view culling covers both eyes with), set by
     /// `render_xr` around each eye's frame.
     xr_view: Option<ViewSet>,
+    /// VR: the share of the render distance the terrain is drawn to (`xr_follow_budget`),
+    /// 1 unless the frames run over the headset's time (a glide high over a wide view).
+    xr_reach: f32,
+    /// Frames until `xr_reach` may move again.
+    xr_reach_wait: u32,
     /// VR: the lens of the eye being drawn (tangents left, right, up, down), for the
     /// title panorama.
     xr_eye_fov: Option<[f32; 4]>,
@@ -4987,6 +4992,8 @@ impl Renderer {
             spare_surface: std::sync::Mutex::new(None),
             offscreen,
             xr_view: None,
+            xr_reach: 1.0,
+            xr_reach_wait: 0,
             xr_eye_fov: None,
             xr_snapshot: None,
             xr_hud_skip: false,
@@ -7411,6 +7418,40 @@ impl Renderer {
     }
     /// Each of Horizon's own passes with its median GPU time in milliseconds, while they are
     /// timed (`set_pass_timing`).
+    /// `xr_reach` while a VR frame is drawn, else 1 (the desktop, the flat screens).
+    fn xr_reach_now(&self) -> f32 {
+        if self.xr_view.is_some() || self.xr_eyes.is_some() { self.xr_reach } else { 1.0 }
+    }
+    /// VR: draws the terrain nearer while a frame's GPU time (`frame_ms`, both eyes) runs over
+    /// the headset's frame (half the rate with SpaceWarp), and back out once it has room.
+    /// The times are medians over recent frames, so a step waits for them to follow.
+    /// `HORIZON_XR_REACH=0` keeps the whole distance.
+    #[cfg(target_os = "android")]
+    fn xr_follow_budget(&mut self, frame_ms: f32) {
+        static OFF: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        if *OFF.get_or_init(|| std::env::var("HORIZON_XR_REACH").as_deref() == Ok("0")) {
+            self.xr_reach = 1.0;
+            return;
+        }
+        if self.xr_reach_wait > 0 {
+            self.xr_reach_wait -= 1;
+            return;
+        }
+        let rate = if horizon_xr::space_warp_size().is_some() { 36.0 } else { 72.0 };
+        // Room left for the CPU's part and the compositor.
+        let target = 1000.0 / rate * 0.85;
+        let before = self.xr_reach;
+        if frame_ms > target {
+            self.xr_reach = (self.xr_reach - 0.06).max(0.55);
+            self.xr_reach_wait = 8;
+        } else if frame_ms < target * 0.8 {
+            self.xr_reach = (self.xr_reach + 0.02).min(1.0);
+            self.xr_reach_wait = 4;
+        }
+        if (self.xr_reach - before).abs() > 0.001 && (self.xr_reach == 0.55 || self.xr_reach == 1.0) {
+            log::info!("Horizon VR: terrain reach {:.0}% (frame {frame_ms:.1} ms of {target:.1})", self.xr_reach * 100.0);
+        }
+    }
     pub fn own_pass_times(&self) -> Vec<(String, f32)> {
         self.own_timing
             .as_ref()
@@ -7865,6 +7906,7 @@ impl Renderer {
             .sum();
         if eye_ms > 0.0 {
             horizon_xr::note_gpu_ms(eye_ms * 2.0 - once);
+            self.xr_follow_budget(eye_ms * 2.0 - once);
         }
         horizon_xr::end_frame(&self.queue);
         drawn
@@ -8328,8 +8370,8 @@ impl Renderer {
                 [
                     f.environmental_start,
                     f.environmental_end,
-                    f.render_distance_start,
-                    f.render_distance_end,
+                    f.render_distance_start * self.xr_reach_now(),
+                    f.render_distance_end * self.xr_reach_now(),
                 ],
             )
         } else if frame.underwater {
@@ -8692,6 +8734,17 @@ impl Renderer {
                 &mut visible,
             )
         });
+        // VR over its time: the terrain ends nearer, where the render distance's fog now ends.
+        let reach = self.xr_reach_now();
+        if reach < 1.0 {
+            let limit = (frame.detail_distance / 16.0) * reach;
+            let (cx, cz) = resident::camera_column(camera);
+            visible.retain(|v| {
+                let gap = |d: i32| (d.abs() - 1).max(0) as f32;
+                let (dx, dz) = (gap(v.key.0 - cx), gap(v.key.2 - cz));
+                dx * dx + dz * dz < limit * limit
+            });
+        }
         #[cfg(debug_assertions)]
         assert!(
             !gpu_frame || self.occlusion.generation() == graph_given,
