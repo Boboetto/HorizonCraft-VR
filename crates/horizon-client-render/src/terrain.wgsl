@@ -595,6 +595,13 @@ fn terrain_vertex(position: vec3<f32>, uv: vec2<f32>, layer: u32, color: vec4<f3
     if globals.colored_count.x > 0u {
         out.color = vec4(min(out.color.rgb + color.rgb * native_colored_light(pos), vec3(1.0)), out.color.a);
     }
+    if vr_look() {
+        // Torch light a little warmer where it outshines the sky's.
+        let torch = smoothstep(0.3, 1.0, out.scene.x * (16.0 / 15.0))
+            * (1.0 - out.scene.y * globals.hdr_light.x);
+        out.color = vec4(out.color.rgb * mix(vec3(1.0), vec3(1.10, 0.97, 0.82), max(torch, 0.0)),
+            out.color.a);
+    }
     out.emission = 15u - (u32(round(color.a * 255.0)) & 15u);
     out.height = pos.y;
     out.spherical = length(pos);
@@ -605,14 +612,52 @@ fn terrain_vertex(position: vec3<f32>, uv: vec2<f32>, layer: u32, color: vec4<f3
         clamp((length(pos) - CHUNK_FULLY_VISIBLE_RANGE) / CHUNK_FULLY_VISIBLE_RANGE, 0.0, 1.0));
     return out;
 }
+// The VR look (gfx.rs `vr_look`, the launcher's "VR shader"): only in the headset. Cheap
+// per-pixel touches and no moved vertices: SpaceWarp's made-up frames have no motion for
+// those (waving leaves would smear).
+fn vr_look() -> bool {
+    return globals.emissive_count.y != 0u;
+}
+// Water, among the translucent faces: its still or flowing sprite (gfx.rs's lane, mesher.rs
+// `WATER_LAYERS`).
+fn vr_is_water(layer: u32) -> bool {
+    let w = globals.emissive_count.z;
+    return (w & 0x8000u) != 0u && (layer == (w & 0x7fffu) || layer == (w >> 16u));
+}
+// Water's top: the sky's colour reflected at grazing angles (Fresnel) and soft moving
+// highlights. The waves' periods divide 16 blocks, so they meet across sections and tiles.
+fn vr_water(in: TerrainOut, color: vec4<f32>) -> vec4<f32> {
+    // PI, declared past the section shader packs copy (gfx/native_material.rs).
+    const TAU_HALF: f32 = 3.14159265;
+    let n = normalize(cross(dpdy(in.local), dpdx(in.local)));
+    if abs(n.y) < 0.9 {
+        return color;
+    }
+    let cos_view = clamp(abs(in.height) / max(in.spherical, 0.001), 0.0, 1.0);
+    let fresnel = pow(1.0 - cos_view, 4.0);
+    // A day is time.x 0..1: 300 waves a day, one every 4 seconds, whole at the wrap.
+    let phase = fract(globals.time.x * 300.0) * 2.0 * TAU_HALF;
+    let p = in.local.xz;
+    let wave = sin(p.x * TAU_HALF * 0.5 + phase) + sin(p.y * TAU_HALF * 0.375 - phase * 0.8)
+        + sin((p.x + p.y) * TAU_HALF * 0.25 + phase * 1.3);
+    let glint = smoothstep(1.7, 2.7, wave);
+    let lit = max(in.color.r, max(in.color.g, in.color.b));
+    var rgb = mix(color.rgb, globals.sky_color.rgb * lit, fresnel * 0.7);
+    rgb += vec3(glint * 0.22 * lit);
+    return vec4(rgb, mix(color.a, 1.0, fresnel * 0.6));
+}
 fn linear_fog(d: f32, start: f32, end: f32) -> f32 {
     if d <= start { return 0.0; }
     if d >= end { return 1.0; }
     return (d - start) / (end - start);
 }
 fn apply_fog(color: vec4<f32>, spherical: f32, cylindrical: f32) -> vec4<f32> {
-    let f = max(linear_fog(spherical, globals.fog.x, globals.fog.y),
+    var f = max(linear_fog(spherical, globals.fog.x, globals.fog.y),
                 linear_fog(cylindrical, globals.fog.z, globals.fog.w));
+    if vr_look() {
+        // Softer: it comes in gently and closes smoothly.
+        f = smoothstep(0.0, 1.0, f);
+    }
     return vec4(mix(color.rgb, globals.fog_color.rgb, f * globals.fog_color.a), color.a);
 }
 // hdr.wgsl's brightness: the mean of luminance and the brightest channel, in
@@ -778,6 +823,9 @@ fn solid_finish_at(in: TerrainOut, texel: vec4<f32>, color: vec4<f32>, du: vec2<
 // pixels showed the layer behind through the one in front, twice the water.
 @fragment fn fs_translucent(in: TerrainOut) -> @location(0) vec4<f32> {
     var color = sprite(in.uv, in.layer & 0x7fffu) * in.color;
+    if vr_look() && vr_is_water(in.layer & 0x7fffu) {
+        color = vr_water(in, color);
+    }
     color = mix(globals.fog_color * vec4(1.0, 1.0, 1.0, color.a), color, in.visibility);
     if color.a < 0.01 { discard; }
     return apply_fog(color, in.spherical, in.cylindrical);
@@ -937,6 +985,13 @@ fn sky_along_ray_base(d: vec3<f32>) -> vec3<f32> {
     let dist = disc_distance(d, 16.0);
     if dist.x >= 0.0 {
         color = sky_fog(globals.sky_color.rgb, dist);
+    }
+    // The VR look: at sunrise and sunset a warm glow along the horizon, strongest toward
+    // the sun.
+    if globals.emissive_count.y != 0u && globals.sunrise.a > 0.0 {
+        let low = 1.0 - clamp(abs(d.y) * 3.0, 0.0, 1.0);
+        let toward = max(dot(normalize(d.xz + vec2(1e-5)), normalize(globals.sun.xz + vec2(1e-5))), 0.0);
+        color = mix(color, globals.sunrise.rgb, low * low * (0.35 + 0.65 * toward) * globals.sunrise.a);
     }
     return color;
 }

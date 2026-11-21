@@ -88,6 +88,7 @@ fn android_main(app: AndroidApp) {
             ("hz", "HORIZON_XR_HZ"),
             ("contrast", "HORIZON_XR_CONTRAST"),
             ("saturation", "HORIZON_XR_SATURATION"),
+            ("shader", "HORIZON_XR_SHADER"),
         ] {
             let value = text
                 .lines()

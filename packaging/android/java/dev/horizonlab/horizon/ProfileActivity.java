@@ -257,7 +257,9 @@ public class ProfileActivity extends Activity implements View.OnClickListener {
         final Button boostButton = Ui.button(this, "", false);
         final Button warpButton = Ui.button(this, "", false);
         final Button colorButton = Ui.button(this, "", false);
+        final Button shaderButton = Ui.button(this, "", false);
         vividOn = vrSetting("contrast", 1.08f) > 1.001f;
+        shaderOn = vrSetting("shader", 0) != 0;
         final boolean[] pace = {vrSetting("pace", 1) != 0};
         msaaOn = vrSetting("msaa", 1) != 0;
         boostOn = vrSetting("boost", 1) != 0;
@@ -281,6 +283,7 @@ public class ProfileActivity extends Activity implements View.OnClickListener {
                 boostButton.setText(Ui.t("Ускорение: ", "Performance boost: ") + (boostOn ? "On" : "Off"));
                 warpButton.setText("SpaceWarp: " + (warpOn ? "On" : "Off"));
                 colorButton.setText(Ui.t("Цвета: ", "Colours: ") + (vividOn ? Ui.t("яркие", "vivid") : Ui.t("обычные", "natural")));
+                shaderButton.setText(Ui.t("VR-шейдер: ", "VR shader: ") + (shaderOn ? "On" : "Off"));
                 summary.setText(String.format(java.util.Locale.ROOT,
                         "Quality · %.2fx · 72 Hz · 6 chunks · anisotropic 8x%s", vrScale, msaaOn ? " · MSAA 4x" : ""));
             }
@@ -356,6 +359,18 @@ public class ProfileActivity extends Activity implements View.OnClickListener {
         card.addView(Ui.text(this, Ui.t(
                 "Яркие цвета: чуть больше контраста и цвета в шлеме, картинка чётче.",
                 "Vivid colours: a little more contrast and colour in the headset, for a crisper picture. Natural shows the game's own colours."),
+                12, Ui.MUTED, false));
+        shaderButton.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                shaderOn = !shaderOn;
+                saveVr(vrScale, 72, pace[0]);
+                showVr.run();
+            }
+        });
+        card.addView(shaderButton, Ui.gap(this, 6));
+        card.addView(Ui.text(this, Ui.t(
+                "VR-шейдер: тёплый свет факелов, блики и отражение неба на воде, сияние заката у горизонта, мягкий туман.",
+                "VR shader: warmer torch light, light ripples and the sky's reflection on water, a sunset glow along the horizon, softer fog."),
                 12, Ui.MUTED, false));
         card.addView(scaleButton, Ui.gap(this, 6));
         card.addView(Ui.text(this, Ui.t(
@@ -901,8 +916,12 @@ public class ProfileActivity extends Activity implements View.OnClickListener {
     private boolean vividOn = true;
 
     private String colorLines() {
-        return vividOn ? "contrast=1.08\nsaturation=1.06\n" : "contrast=1.00\nsaturation=1.00\n";
+        return (vividOn ? "contrast=1.08\nsaturation=1.06\n" : "contrast=1.00\nsaturation=1.00\n")
+                + (shaderOn ? "shader=1\n" : "shader=0\n");
     }
+
+    /** The VR shader (horizon-vr.txt `shader=`, the game's HORIZON_XR_SHADER), off by default. */
+    private boolean shaderOn = false;
 
     /** VR's Application SpaceWarp (horizon-vr.txt `spacewarp=`), on by default. */
     private boolean warpOn = true;

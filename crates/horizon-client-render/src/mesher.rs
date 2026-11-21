@@ -690,6 +690,11 @@ pub struct MeshTables {
     lava_flow: u16,
     animated_layers: Vec<bool>,
 }
+/// The water sprites' layers (still in the low 15 bits, flowing from bit 16), with
+/// `WATER_LAYERS_SET`, once a mesher's tables know them: the VR look's water (terrain.wgsl
+/// `vr_water`) tells water from glass by them.
+pub static WATER_LAYERS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+pub const WATER_LAYERS_SET: u32 = 0x8000;
 fn stem_color(age: u8) -> u32 {
     let a = u32::from(age);
     (a * 32) << 16 | (255 - a * 8) << 8 | (a * 4)
@@ -849,6 +854,12 @@ impl MeshTables {
                 cover,
             });
         }
+        let water_still = layer("minecraft:block/water_still")?;
+        let water_flow = layer("minecraft:block/water_flow")?;
+        WATER_LAYERS.store(
+            u32::from(water_still) | u32::from(water_flow) << 16 | WATER_LAYERS_SET,
+            std::sync::atomic::Ordering::Relaxed,
+        );
         Ok(Self {
             solid: info.iter().map(|i| i.solid).collect(),
             full_faces: info
@@ -857,8 +868,8 @@ impl MeshTables {
                 .collect(),
             info,
             visibility,
-            water_still: layer("minecraft:block/water_still")?,
-            water_flow: layer("minecraft:block/water_flow")?,
+            water_still,
+            water_flow,
             water_overlay: layer("minecraft:block/water_overlay")?,
             lava_still: layer("minecraft:block/lava_still")?,
             lava_flow: layer("minecraft:block/lava_flow")?,

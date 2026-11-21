@@ -66,6 +66,15 @@ pub fn outline_width(width: u32) -> f32 {
     2.5f32.max(width as f32 / 1920.0 * 2.5)
 }
 
+/// The VR look (terrain.wgsl `vr_look`): a warmer torch light, water with light ripples
+/// and the sky's reflection, a sunrise glow along the horizon and softer fog. Only in the
+/// headset, on with `HORIZON_XR_SHADER=1` (horizon-vr.txt `shader=1`, the launcher's "VR
+/// shader").
+fn vr_look() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("HORIZON_XR_SHADER").as_deref() == Ok("1"))
+}
+
 /// ScreenSize, stroke width and ProjectionType.PERSPECTIVE layering.
 pub fn outline_params(width: u32, height: u32) -> [f32; 4] {
     [
@@ -8465,8 +8474,9 @@ impl Renderer {
             },
             emissive_count: [
                 frame.emissive_layers.len().min(crate::native_emissive::MAX) as u32,
-                0,
-                0,
+                // The VR look (terrain.wgsl `vr_look`) and the water sprites it ripples.
+                u32::from(self.xr_view.is_some() && vr_look()),
+                crate::mesher::WATER_LAYERS.load(std::sync::atomic::Ordering::Relaxed),
                 0,
             ],
             sunrise_fan: sunrise_fan::normals(frame.sky.sunrise_color[3], sun),
