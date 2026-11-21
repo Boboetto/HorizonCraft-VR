@@ -61,6 +61,9 @@ public class SetupActivity extends Activity
     @Override
     protected void onCreate(Bundle state) {
         super.onCreate(state);
+        // The app's internal folder, where the setup unpacks its Java runtime
+        // (android_setup.rs's internal_dir): Android makes it on its first getFilesDir().
+        getFilesDir().mkdirs();
         home = home(this);
         if (nativeReady(home) == 1) {
             launch();

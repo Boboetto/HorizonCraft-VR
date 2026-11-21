@@ -141,7 +141,9 @@ public class HorizonActivity extends NativeActivity {
 
     /** Called from the game thread: the profile screen (name, skin). */
     public void openProfile() {
-        startActivity(new android.content.Intent(this, ProfileActivity.class));
+        // Into the 2D screens' task, not the game's own.
+        startActivity(new android.content.Intent(this, ProfileActivity.class)
+                .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK));
     }
 
     /**
@@ -220,7 +222,8 @@ public class HorizonActivity extends NativeActivity {
                     } catch (Exception ignored) {
                     }
                 }
-                startActivity(new android.content.Intent(HorizonActivity.this, ProfileActivity.class));
+                startActivity(new android.content.Intent(HorizonActivity.this, ProfileActivity.class)
+                        .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK));
             }
         });
     }

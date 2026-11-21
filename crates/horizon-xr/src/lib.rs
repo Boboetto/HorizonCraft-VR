@@ -538,12 +538,13 @@ pub fn instance_and_adapter() -> Option<(wgpu::Instance, wgpu::Adapter)> {
     if xr_state().is_some() {
         return None;
     }
+    // No flat start after a launch that never got focus (`xr.pending` is only logged now):
+    // the APK is VR only, and a flat start on a headset is a black view with music.
     if let Some(marker) = marker()
         && marker.exists()
     {
         let _ = std::fs::remove_file(&marker);
-        log::warn!("Horizon VR: the last VR launch never got focus; starting flat this time");
-        return None;
+        log::warn!("Horizon VR: the last VR launch never got focus; trying VR again");
     }
     match open_instance(ctx) {
         Ok(opened) => Some(opened),

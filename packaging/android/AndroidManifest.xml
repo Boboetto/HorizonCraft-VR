@@ -55,6 +55,7 @@
         <activity
             android:name=".HorizonActivity"
             android:exported="false"
+            android:taskAffinity="dev.horizonlab.horizon.vr"
             android:process=":game"
             android:screenOrientation="sensorLandscape"
             android:launchMode="singleTask"

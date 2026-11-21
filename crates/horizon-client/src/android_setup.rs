@@ -451,6 +451,9 @@ fn internal_dir() -> Option<PathBuf> {
     let name = String::from_utf8_lossy(cmdline.split(|b| *b == 0).next()?).into_owned();
     let package = name.split(':').next()?.to_string();
     let dir = PathBuf::from(format!("/data/data/{package}/files"));
+    // Android makes it on the app's first getFilesDir() (SetupActivity asks at once); make
+    // it here too, else a first setup failed with "cannot find the app's internal folder".
+    let _ = fs::create_dir_all(&dir);
     dir.is_dir().then_some(dir)
 }
 

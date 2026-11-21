@@ -1028,8 +1028,16 @@ public class ProfileActivity extends Activity implements View.OnClickListener {
             // Left by an older build's "PLAY 2D": the game would start without VR.
             new java.io.File(getFilesDir(), "launch-2d").delete();
             Intent i = new Intent(this, HorizonActivity.class);
-            i.addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT);
-            startActivity(i);
+            // A fresh task of its own (the manifest's taskAffinity) on the headset's main
+            // display: started from this 2D panel in its task, some Horizon OS versions put the
+            // game's window on the panel's virtual display, and the VR session never got focus
+            // (a black view with the music playing). Started on display 0, as `am start` does,
+            // it gets focus. (Found by the Quest 1 fork, github.com/Bubbagum88/HorizonCraft-VR,
+            // after github.com/amwatson/2DVrHybrid.)
+            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
+            android.app.ActivityOptions options = android.app.ActivityOptions.makeBasic();
+            options.setLaunchDisplayId(android.view.Display.DEFAULT_DISPLAY);
+            startActivity(i, options.toBundle());
             finish();
         } else if (v == driver) {
             Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
