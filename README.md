@@ -5,12 +5,12 @@
 <h1 align="center">HorizonCraft VR</h1>
 
 <p align="center">
-  Standalone VR for <b>Meta Quest 3</b>, on Horizon: Minecraft: Java Edition 26.3 rewritten in Rust
+  Standalone VR for <b>Meta Quest 3, 3S and 2</b>, on Horizon: Minecraft: Java Edition 26.3 rewritten in Rust
 </p>
 
 <p align="center">
   <a href="https://github.com/Boboetto/HorizonCraft-VR/releases/latest"><img src="https://img.shields.io/github/v/release/Boboetto/HorizonCraft-VR?label=release" alt="Latest release"></a>
-  <img src="https://img.shields.io/badge/Meta%20Quest-3%20only-1C1E20" alt="Meta Quest 3 only">
+  <img src="https://img.shields.io/badge/Meta%20Quest-3%20%7C%203S%20%7C%202-1C1E20" alt="Meta Quest 3, 3S and 2">
   <img src="https://img.shields.io/badge/Minecraft-Java%2026.3-5D9C3F" alt="Minecraft Java 26.3">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="License MIT"></a>
 </p>
@@ -19,7 +19,7 @@
 > You need to **own Minecraft: Java Edition**. This repository and its releases contain **no Mojang files**: the app
 > downloads them from Mojang on the headset.
 
-HorizonCraft VR is a standalone APK for the **Meta Quest 3** (for now the only supported headset): no PC, no streaming.
+HorizonCraft VR is a standalone APK for the **Meta Quest 3 and 3S**, and it runs on the **Quest 2** too (thanks to the players who tested it there; lower the resolution and chunks for a smooth game): no PC, no streaming.
 It plays Minecraft: Java Edition 26.3 in VR, with motion controls in the spirit of Vivecraft and QuestCraft.
 
 **1.0** is the first stable release, tested on the Quest 3: a steady 72 Hz with Application SpaceWarp, terrain drawn
@@ -80,9 +80,9 @@ sticks and turn on snap turning.
 | Left / right stick click | sprint / sneak | – |
 | Menu button | pause | – |
 
-## Install on the Meta Quest 3
+## Install on the Meta Quest 3, 3S or 2
 
-1. Turn on **developer mode** for your Quest 3: in the **Meta Horizon** app on your phone → Menu → Devices →
+1. Turn on **developer mode** for your Quest: in the **Meta Horizon** app on your phone → Menu → Devices →
    your headset → Headset settings → Developer mode (Meta asks you to create a free developer account once).
 2. Download **`HorizonCraft-VR-v*.apk`** from the [latest release](https://github.com/Boboetto/HorizonCraft-VR/releases/latest).
 3. Install it with **SideQuest**: connect the headset to the computer with its USB-C cable, accept "Allow USB debugging"

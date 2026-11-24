@@ -2046,6 +2046,7 @@ struct Opened {
 /// Logs the adapter and records it for telemetry and crash reports.
 fn describe_adapter(adapter: &wgpu::Adapter) {
     let info = adapter.get_info();
+    let _ = OLD_ADRENO.set(old_adreno(&info.name));
     log::info!(
         "Horizon renderer: {} ({:?}, {:?})",
         info.name,
@@ -11094,7 +11095,8 @@ impl Renderer {
                 && flat_frame
                 && let (Some(flat), Some(pipeline)) = (
                     self.flat.as_ref(),
-                    msp.and_then(|m| m.flat_translucent.as_ref()).filter(|_| ms.is_some()),
+                    msp.and_then(|m| m.flat_translucent.as_ref())
+                        .filter(|_| ms.is_some() && xr_msaa_extras()),
                 )
             {
                 pass.set_pipeline(pipeline);
@@ -12191,8 +12193,11 @@ impl Renderer {
                     view: behind_world.as_ref().unwrap_or(&self.depth),
                     depth_ops: Some(wgpu::Operations {
                         load: if behind_world.is_some() { wgpu::LoadOp::Load } else { wgpu::LoadOp::Clear(0.0) },
-                        // HDR output's hand marks test against it (below).
-                        store: if self.hdr.is_some() {
+                        // HDR output's hand marks test against it (below). VR: SpaceWarp reads
+                        // this depth after the frame, so the arms keep theirs; discarded, the
+                        // made-up frames moved them as the world behind them (smeared hands)
+                        // and a tiler may leave the whole depth undefined.
+                        store: if self.hdr.is_some() || behind_world.is_some() {
                             wgpu::StoreOp::Store
                         } else {
                             wgpu::StoreOp::Discard
@@ -13077,11 +13082,39 @@ fn xr_flat_draws() -> bool {
     }
 }
 
+/// Whether the GPU is an Adreno older than the 700s (Quest 2 and Pro: Adreno 650), set when
+/// the adapter is opened (`describe_adapter`).
+static OLD_ADRENO: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+
+fn old_adreno(name: &str) -> bool {
+    let Some(at) = name.find("Adreno") else {
+        return false;
+    };
+    let digits: String = name[at..]
+        .chars()
+        .skip_while(|c| !c.is_ascii_digit())
+        .take_while(char::is_ascii_digit)
+        .collect();
+    digits.parse::<u32>().is_ok_and(|n| n < 700)
+}
+
+/// VR's MSAA extras of the Quest 3 (the cut-out tested per sample, translucent terrain
+/// inside the multisampled pass): on the Quest 2's Adreno 650 leaves, water and glass
+/// vanished with them (issues #6, #7), so it draws them as before there.
+/// `HORIZON_XR_MSAA_EXTRAS=1` or `0` overrides.
+fn xr_msaa_extras() -> bool {
+    match std::env::var("HORIZON_XR_MSAA_EXTRAS").as_deref() {
+        Ok("1") => true,
+        Ok("0") => false,
+        _ => !OLD_ADRENO.get().copied().unwrap_or(false),
+    }
+}
+
 /// VR's MSAA: the cut-out pass (grass, leaves, flowers) tests the cut-out at each of the 4
 /// samples (`fs_solid_coverage`), smoothing the edges inside their textures.
 /// `HORIZON_XR_CUTOUT_AA=0` tests it once per pixel, as before.
 fn xr_cutout_fragment() -> &'static str {
-    if std::env::var("HORIZON_XR_CUTOUT_AA").as_deref() == Ok("0") {
+    if std::env::var("HORIZON_XR_CUTOUT_AA").as_deref() == Ok("0") || !xr_msaa_extras() {
         "fs_solid"
     } else {
         "fs_solid_coverage"
@@ -13319,6 +13352,14 @@ mod tests {
             assert!(view.intersects_depth(p - Vec3::splat(10.0), p + Vec3::splat(10.0)));
             assert!(view.intersects_depth(Vec3::splat(f32::NAN), Vec3::ONE));
         }
+    }
+    #[test]
+    fn quest_2_and_pro_gpus_are_older_adrenos_than_the_quest_3s() {
+        assert!(super::old_adreno("Adreno (TM) 650"));
+        assert!(super::old_adreno("Adreno (TM) 540"));
+        assert!(!super::old_adreno("Adreno (TM) 740"));
+        assert!(!super::old_adreno("Adreno (TM) 830"));
+        assert!(!super::old_adreno("NVIDIA GeForce GTX 1050"));
     }
     #[test]
     fn opaque_gizmo_lines_upload_first_for_the_depth_writing_pipeline() {

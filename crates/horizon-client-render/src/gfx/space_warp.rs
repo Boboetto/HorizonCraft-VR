@@ -138,7 +138,14 @@ struct ObjectOut {
     if in.clip.z < stored - (stored * 0.01 + 1e-6) {
         discard;
     }
-    return vector(in.now, in.then);
+    // At most a fifth of the view per drawn frame: a hand swung fast, or a pose matched
+    // wrongly, otherwise streaked across the made-up frames.
+    let v = vector(in.now, in.then);
+    let reach = length(v.xy);
+    if reach > 0.4 {
+        return vec4<f32>(v.xyz * (0.4 / reach), 0.0);
+    }
+    return v;
 }
 ";
 

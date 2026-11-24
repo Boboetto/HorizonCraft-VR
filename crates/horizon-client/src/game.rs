@@ -9464,7 +9464,9 @@ impl Game<'_> {
                     self.audio.capture = capture;
                 }
             }
-            if !spectator {
+            // VR: the name of each item taken in hand popped up in front of the eyes on the
+            // head's panel, again and again (issue #6); the wrist hotbar shows the item.
+            if !spectator && !Self::xr_running() {
                 self.gui_layer("minecraft:selected_item_name", &mut batch, |g, batch| {
                     g.draw_selected_name(batch, !g.creative);
                 });

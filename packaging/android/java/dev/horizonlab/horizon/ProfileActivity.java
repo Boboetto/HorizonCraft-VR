@@ -1046,6 +1046,16 @@ public class ProfileActivity extends Activity implements View.OnClickListener {
             if (!saveProfile()) return;
             // Left by an older build's "PLAY 2D": the game would start without VR.
             new java.io.File(getFilesDir(), "launch-2d").delete();
+            // The game's files not downloaded yet (the launcher opened from the first screen,
+            // issue #5): the download screen, in a task of its own so nothing brings the
+            // launcher back over it. Started, the game found no files and went back here.
+            if (SetupActivity.nativeReady(SetupActivity.home(this)) != 1) {
+                Intent setup = new Intent(this, SetupActivity.class);
+                setup.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
+                startActivity(setup);
+                finish();
+                return;
+            }
             Intent i = new Intent(this, HorizonActivity.class);
             // A fresh task of its own (the manifest's taskAffinity) on the headset's main
             // display: started from this 2D panel in its task, some Horizon OS versions put the
